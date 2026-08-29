@@ -128,7 +128,7 @@ void __not_in_flash_func(on_bt_data)(CHANNEL_TYPE channel, uint8_t *data, uint16
         // diff for edge detection) and short-circuiting it on non-2 polling
         // modes silently breaks wake while the host is suspended.
         wake_on_bt_input(data + 3, len - 3);
-        wifi_wake_note_bt_input();
+        wifi_wake_note_bt_input(data + 3, len - 3);
         #ifdef ENABLE_WAKE_HID
         ps_shortcut_tick(data + 3, len - 3);
         #endif

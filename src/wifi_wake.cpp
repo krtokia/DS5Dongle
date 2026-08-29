@@ -380,8 +380,43 @@ void wifi_wake_init(void) {
            BRINGUP_IDLE_MS / 1000, WIFI_WAKE_BT_IDLE_MIN);
 }
 
-void wifi_wake_note_bt_input(void) {
-    last_bt_input = get_absolute_time();
+void wifi_wake_note_bt_input(const uint8_t *hid_input, uint16_t len) {
+    // A DualSense streams input reports at the polling rate for as long as it
+    // is connected, so a report arriving says nothing about whether anyone is
+    // holding it. Only a change in what it reports does.
+    //
+    // Layout (after main.cpp's `data + 3` skip), same bytes wake.cpp reads:
+    //   1..4  stick axes      5..6  L2 / R2
+    //   7     d-pad + face    8     shoulders, share, options, L3, R3
+    //   9     PS, touchpad, mute
+    //
+    // Buttons compare exactly. The analog axes need a deadzone, because a stick
+    // at rest jitters by a count or two, and prev only advances on a real
+    // change so that jitter can never accumulate into one.
+    static const int AXIS_DEADZONE = 8;
+    static uint8_t prev[10];
+    static bool have_prev = false;
+
+    if (len < 10) return;
+
+    bool changed = false;
+    if (!have_prev) {
+        have_prev = true;
+        changed = true;
+    } else if (hid_input[7] != prev[7] || hid_input[8] != prev[8] || hid_input[9] != prev[9]) {
+        changed = true;
+    } else {
+        for (int i = 1; i <= 6; i++) {
+            int d = (int)hid_input[i] - (int)prev[i];
+            if (d < 0) d = -d;
+            if (d > AXIS_DEADZONE) { changed = true; break; }
+        }
+    }
+
+    if (changed) {
+        memcpy(prev, hid_input, sizeof(prev));
+        last_bt_input = get_absolute_time();
+    }
 }
 
 void wifi_wake_task(void) {
