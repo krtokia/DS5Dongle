@@ -63,6 +63,8 @@ typedef enum {
 
 static critical_section_t wake_cs;
 static volatile bool host_suspended = false;
+static volatile uint32_t suspend_count = 0;
+static volatile uint32_t resume_count = 0;
 static volatile bool host_resumed_event = false;
 static wake_state_t state = WAKE_IDLE;
 static uint64_t state_entered_us = 0;
@@ -141,6 +143,7 @@ extern "C" void tud_suspend_cb(bool remote_wakeup_en) {
     suspend_at_us = time_us_64();
     host_suspended = true;
     host_resumed_event = false;
+    suspend_count++;
     
     // Everything below is the wake-UP path (press a key to wake the host) -- enable_wake only.
     if (!get_config().enable_wake) return;
@@ -169,6 +172,7 @@ void wake_on_bt_connect(void) {
 
 extern "C" void tud_resume_cb(void) {
     WAKE_DBG("tud_resume_cb state=%s", wake_state_name(state));
+    resume_count++;
     host_suspended = false;
     host_resumed_event = true;
     suspend_at_us = 0;   // resumed before the debounce elapsed -> cancel the disconnect
@@ -265,6 +269,9 @@ void wake_request_from_network(void) {
 bool wake_host_is_suspended(void) {
     return host_suspended;
 }
+
+uint32_t wake_suspend_count(void) { return suspend_count; }
+uint32_t wake_resume_count(void)  { return resume_count; }
 
 void wake_on_bt_disconnect(void) {
     critical_section_enter_blocking(&wake_cs);

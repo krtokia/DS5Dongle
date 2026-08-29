@@ -66,10 +66,15 @@
 // enumerating. Wait well past that before performing the blocking teardown.
 #define TEARDOWN_DELAY_MS   5000
 // How long the controller has to stay away before Wi-Fi is worth bringing up.
-// This is a fallback, not the main signal, so it is deliberately long: with the
-// host awake and the controller merely switched off, Bluetooth should keep the
-// radio at full rate so the controller attaches quickly when it comes back.
-#define BRINGUP_IDLE_MS     (5 * 60 * 1000)
+// A fallback for hosts that never report a suspend, so it cannot be so long
+// that a wake becomes impossible on those. The cost of it being short is that
+// a controller switched back on takes about a second longer to attach.
+#define BRINGUP_IDLE_MS     30000
+
+// The USB link dies with the host, so nothing can be watched live across a
+// suspend. Printing the running totals instead means they can be read back
+// after the host wakes - in particular whether it suspended the bus at all.
+#define STATUS_INTERVAL_MS  10000
 
 // A controller can stay connected while nobody is using it - it is paired and
 // idle on the desk. Sitting untouched this long means nobody is playing, and by
@@ -428,8 +433,28 @@ void wifi_wake_note_bt_input(const uint8_t *hid_input, uint16_t len) {
     }
 }
 
+void report_status() {
+    static absolute_time_t next_report;
+    if (absolute_time_diff_us(get_absolute_time(), next_report) > 0) return;
+    next_report = make_timeout_time_ms(STATUS_INTERVAL_MS);
+
+    const int64_t idle_ms = absolute_time_diff_us(last_bt_input, get_absolute_time()) / 1000;
+    printf("[wifi-wake] status: wifi=%s link=%s host=%s suspends=%lu resumes=%lu "
+           "controller=%s idle=%llds\n",
+           radio_up ? "up" : "down",
+           link_state == LinkState::Connected ? "connected"
+               : (link_state == LinkState::Connecting ? "connecting" : "idle"),
+           wake_host_is_suspended() ? "suspended" : "awake",
+           (unsigned long)wake_suspend_count(), (unsigned long)wake_resume_count(),
+           bt_is_connected() ? "connected" : "none",
+           (long long)(idle_ms / 1000));
+}
+
+
+
 void wifi_wake_task(void) {
     if (!credentials_ok) return;
+    report_status();
 
     if (trigger_pending) {
         trigger_pending = false;
