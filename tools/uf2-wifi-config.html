@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pico 2 W Wake - Wi-Fi 설정 주입기</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --ink: #16181d;
+    --muted: #5c6370;
+    --line: #d9dde3;
+    --accent: #2f6fed;
+    --ok: #1a7f4b;
+    --warn: #9a6a00;
+    --err: #c0392b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a; --panel: #1c1f25; --ink: #e6e8ec; --muted: #9aa1ad;
+      --line: #2e333b; --accent: #6f9bff; --ok: #4cc38a; --warn: #d9a441; --err: #f0776a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1rem 4rem;
+    background: var(--bg); color: var(--ink);
+    font: 15px/1.6 system-ui, -apple-system, "Segoe UI", "Noto Sans KR", sans-serif;
+  }
+  main { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 1.35rem; margin: 0 0 .25rem; }
+  .sub { color: var(--muted); margin: 0 0 1.5rem; font-size: .92rem; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 1.25rem; margin-bottom: 1rem;
+  }
+  .privacy {
+    border-left: 3px solid var(--ok); background: color-mix(in srgb, var(--ok) 8%, transparent);
+    padding: .75rem 1rem; border-radius: 6px; font-size: .9rem; margin-bottom: 1.5rem;
+  }
+  label { display: block; font-weight: 600; font-size: .9rem; margin: 1rem 0 .35rem; }
+  label:first-child { margin-top: 0; }
+  input[type=text], input[type=password], input[type=file] {
+    width: 100%; padding: .55rem .7rem; font: inherit;
+    background: var(--bg); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 6px;
+  }
+  input[type=file] { padding: .5rem; }
+  .row { display: flex; gap: .5rem; align-items: center; }
+  .row input { flex: 1; }
+  .hint { color: var(--muted); font-size: .82rem; margin-top: .3rem; }
+  button {
+    font: inherit; font-weight: 600; padding: .6rem 1.1rem;
+    border-radius: 6px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--ink); cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .status { margin-top: 1rem; font-size: .9rem; white-space: pre-wrap; }
+  .status.ok { color: var(--ok); }
+  .status.warn { color: var(--warn); }
+  .status.err { color: var(--err); }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .88em; }
+  ol { padding-left: 1.25rem; }
+  li { margin: .35rem 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Pico 2 W Wake — Wi-Fi 설정 주입기</h1>
+  <p class="sub">빌드된 <code>.uf2</code> 안의 설정 블록에 SSID와 비밀번호를 써넣습니다.</p>
+
+  <div class="privacy">
+    <strong>이 페이지는 네트워크로 아무것도 보내지 않습니다.</strong><br>
+    파일 읽기·수정·저장이 전부 브라우저 안에서만 일어납니다. 인터넷 연결을 끊고 써도 됩니다.
+  </div>
+
+  <div class="panel">
+    <label for="file">1. 펌웨어 파일 선택 (<span class="mono">pico2w_wake.uf2</span>)</label>
+    <input type="file" id="file" accept=".uf2">
+    <div class="hint" id="fileInfo">GitHub Actions 아티팩트에서 받은 .uf2를 선택하세요.</div>
+
+    <label for="ssid">2. Wi-Fi SSID</label>
+    <input type="text" id="ssid" autocomplete="off" spellcheck="false" placeholder="네트워크 이름">
+    <div class="hint" id="ssidHint">최대 32바이트. 2.4GHz 대역이어야 합니다 (CYW43439는 5GHz 미지원).</div>
+
+    <label for="pass">3. WPA2 비밀번호</label>
+    <div class="row">
+      <input type="password" id="pass" autocomplete="off" spellcheck="false" placeholder="암호">
+      <button type="button" id="toggle">표시</button>
+    </div>
+    <div class="hint" id="passHint">8–63바이트.</div>
+
+    <p style="margin:1.5rem 0 0">
+      <button class="primary" id="go" disabled>설정 주입 후 .uf2 내려받기</button>
+    </p>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div class="panel">
+    <strong>다음 단계</strong>
+    <ol>
+      <li>Pico 2 W의 <strong>BOOTSEL</strong> 버튼을 누른 채 USB를 연결합니다.</li>
+      <li><span class="mono">RP2350</span> 이름의 드라이브가 나타납니다.</li>
+      <li>방금 내려받은 <span class="mono">*-configured.uf2</span>를 그 드라이브에 끌어다 놓습니다.</li>
+      <li>보드가 자동으로 재부팅되며 Wi-Fi 접속을 시작합니다 (온보드 LED 깜빡임 → 상시 점등).</li>
+    </ol>
+  </div>
+</main>
+
+<script>
+"use strict";
+
+// Must match WIFI_CFG_MAGIC and the layout documented in src/wifi_config.h.
+const MAGIC = "PICO2W-WIFI-CFG1";
+const CFG_VERSION  = 1;
+const OFF_VERSION  = 16;
+const OFF_SSID     = 20;
+const LEN_SSID     = 64;
+const OFF_PASS     = 84;
+const LEN_PASS     = 64;
+const OFF_FLAGS    = 148;
+const CFG_LEN      = 152;
+
+const UF2_MAGIC_START0 = 0x0A324655;
+const UF2_MAGIC_START1 = 0x9E5D5157;
+const UF2_MAGIC_END    = 0x0AB16F30;
+const UF2_BLOCK_SIZE   = 512;
+
+const MAX_SSID_BYTES = 32;   // 802.11 SSID limit
+const MIN_PASS_BYTES = 8;    // WPA2-PSK passphrase limits
+const MAX_PASS_BYTES = 63;
+
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+const els = {
+  file: document.getElementById("file"),
+  fileInfo: document.getElementById("fileInfo"),
+  ssid: document.getElementById("ssid"),
+  pass: document.getElementById("pass"),
+  toggle: document.getElementById("toggle"),
+  go: document.getElementById("go"),
+  status: document.getElementById("status"),
+};
+
+let loaded = null;   // { bytes, name, cfgOffsets }
+
+function setStatus(msg, kind) {
+  els.status.textContent = msg;
+  els.status.className = "status" + (kind ? " " + kind : "");
+}
+
+// Parses a .uf2 into its 512-byte blocks, validating the per-block magics.
+function parseBlocks(bytes) {
+  if (bytes.length === 0 || bytes.length % UF2_BLOCK_SIZE !== 0) {
+    throw new Error("UF2 파일이 아닙니다 (크기가 512바이트의 배수가 아님).");
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const blocks = [];
+  for (let i = 0; i < bytes.length / UF2_BLOCK_SIZE; i++) {
+    const base = i * UF2_BLOCK_SIZE;
+    if (view.getUint32(base, true) !== UF2_MAGIC_START0 ||
+        view.getUint32(base + 4, true) !== UF2_MAGIC_START1 ||
+        view.getUint32(base + 508, true) !== UF2_MAGIC_END) {
+      throw new Error(`UF2 블록 ${i}의 매직값이 올바르지 않습니다.`);
+    }
+    blocks.push({
+      family:  view.getUint32(base + 28, true),
+      addr:    view.getUint32(base + 12, true),
+      len:     view.getUint32(base + 16, true),
+      dataOff: base + 32,
+    });
+  }
+  return blocks;
+}
+
+// Groups blocks into runs that are contiguous in flash address space within a
+// single family ID. An RP2350 .uf2 carries a separate "absolute" family block,
+// so a naive concatenation of every payload would not be a flash image.
+function contiguousRuns(blocks) {
+  const order = blocks.map((b, i) => i)
+    .sort((a, b) => blocks[a].family - blocks[b].family || blocks[a].addr - blocks[b].addr);
+  const runs = [];
+  let cur = [];
+  for (const i of order) {
+    const prev = cur.length ? blocks[cur[cur.length - 1]] : null;
+    if (prev && prev.family === blocks[i].family && prev.addr + prev.len === blocks[i].addr) {
+      cur.push(i);
+    } else {
+      if (cur.length) runs.push(cur);
+      cur = [i];
+    }
+  }
+  if (cur.length) runs.push(cur);
+  return runs;
+}
+
+// Returns the byte positions (into `bytes`) that hold the config block, in
+// order. The block can straddle two UF2 payloads, so this is a list rather
+// than a single offset.
+function locateConfig(bytes, blocks) {
+  const magic = enc.encode(MAGIC);
+  const found = [];
+
+  for (const run of contiguousRuns(blocks)) {
+    const total = run.reduce((n, i) => n + blocks[i].len, 0);
+    const flat = new Uint8Array(total);
+    let p = 0;
+    for (const i of run) {
+      flat.set(bytes.subarray(blocks[i].dataOff, blocks[i].dataOff + blocks[i].len), p);
+      p += blocks[i].len;
+    }
+
+    for (let j = 0; j + CFG_LEN <= flat.length; j++) {
+      let hit = true;
+      for (let k = 0; k < magic.length; k++) {
+        if (flat[j + k] !== magic[k]) { hit = false; break; }
+      }
+      if (!hit) continue;
+
+      // Map the flat offset back onto positions in the original file.
+      const positions = new Array(CFG_LEN);
+      let q = 0;
+      for (const i of run) {
+        const lo = Math.max(j, q), hi = Math.min(j + CFG_LEN, q + blocks[i].len);
+        for (let x = lo; x < hi; x++) {
+          positions[x - j] = blocks[i].dataOff + (x - q);
+        }
+        q += blocks[i].len;
+      }
+      found.push({ positions, flashAddr: blocks[run[0]].addr + j, flat, flatOff: j });
+    }
+  }
+
+  if (found.length === 0) {
+    throw new Error(
+      "이 .uf2 안에서 설정 블록을 찾지 못했습니다.\n" +
+      "이 프로젝트로 빌드한 pico2w_wake.uf2가 맞는지 확인하세요.");
+  }
+  if (found.length > 1) {
+    throw new Error(`설정 블록이 ${found.length}개 발견되었습니다. 손상된 파일일 수 있습니다.`);
+  }
+  return found[0];
+}
+
+function readField(flat, base, off, len) {
+  const raw = flat.subarray(base + off, base + off + len);
+  let end = raw.indexOf(0);
+  if (end < 0) end = raw.length;
+  return dec.decode(raw.subarray(0, end));
+}
+
+els.file.addEventListener("change", async () => {
+  loaded = null;
+  els.go.disabled = true;
+  const f = els.file.files[0];
+  if (!f) { els.fileInfo.textContent = "GitHub Actions 아티팩트에서 받은 .uf2를 선택하세요."; return; }
+
+  try {
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    const blocks = parseBlocks(bytes);
+    const cfg = locateConfig(bytes, blocks);
+
+    const version = new DataView(cfg.flat.buffer, cfg.flat.byteOffset, cfg.flat.byteLength)
+      .getUint32(cfg.flatOff + OFF_VERSION, true);
+    if (version !== CFG_VERSION) {
+      throw new Error(`설정 블록 버전이 ${version}입니다. 이 도구는 버전 ${CFG_VERSION}만 지원합니다.`);
+    }
+
+    const currentSsid = readField(cfg.flat, cfg.flatOff, OFF_SSID, LEN_SSID);
+    loaded = { bytes, name: f.name, cfg };
+
+    els.fileInfo.textContent =
+      `설정 블록 확인됨 (flash 주소 0x${cfg.flashAddr.toString(16)}). ` +
+      (currentSsid ? `현재 설정된 SSID: "${currentSsid}"` : "현재 설정된 자격증명 없음.");
+    if (currentSsid && !els.ssid.value) els.ssid.value = currentSsid;
+    setStatus("");
+    validate();
+  } catch (e) {
+    els.fileInfo.textContent = "";
+    setStatus(e.message, "err");
+  }
+});
+
+function validate() {
+  const ssidLen = enc.encode(els.ssid.value).length;
+  const passLen = enc.encode(els.pass.value).length;
+  els.go.disabled = !(loaded && ssidLen >= 1 && ssidLen <= MAX_SSID_BYTES
+                      && passLen >= MIN_PASS_BYTES && passLen <= MAX_PASS_BYTES);
+  return { ssidLen, passLen };
+}
+
+els.ssid.addEventListener("input", validate);
+els.pass.addEventListener("input", validate);
+
+els.toggle.addEventListener("click", () => {
+  const show = els.pass.type === "password";
+  els.pass.type = show ? "text" : "password";
+  els.toggle.textContent = show ? "숨기기" : "표시";
+});
+
+els.go.addEventListener("click", () => {
+  const { ssidLen, passLen } = validate();
+  if (els.go.disabled) return;
+
+  if (ssidLen > MAX_SSID_BYTES) { setStatus("SSID가 32바이트를 넘습니다.", "err"); return; }
+  if (passLen < MIN_PASS_BYTES || passLen > MAX_PASS_BYTES) {
+    setStatus("WPA2 비밀번호는 8–63바이트여야 합니다.", "err"); return;
+  }
+
+  try {
+    // Build the replacement block, then scatter it over the positions the
+    // config occupies in the file.
+    const block = new Uint8Array(CFG_LEN);
+    const bv = new DataView(block.buffer);
+    block.set(enc.encode(MAGIC), 0);
+    bv.setUint32(OFF_VERSION, CFG_VERSION, true);
+    block.set(enc.encode(els.ssid.value), OFF_SSID);
+    block.set(enc.encode(els.pass.value), OFF_PASS);
+    bv.setUint32(OFF_FLAGS, 0, true);
+
+    const out = loaded.bytes.slice();
+    loaded.cfg.positions.forEach((pos, i) => { out[pos] = block[i]; });
+
+    const outName = loaded.name.replace(/\.uf2$/i, "") + "-configured.uf2";
+    const url = URL.createObjectURL(new Blob([out], { type: "application/octet-stream" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = outName;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+
+    setStatus(`${outName} 생성 완료. BOOTSEL 모드의 RP2350 드라이브에 끌어다 놓으세요.`, "ok");
+  } catch (e) {
+    setStatus(e.message, "err");
+  }
+});
+</script>
+</body>
+</html>
