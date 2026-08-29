@@ -37,6 +37,7 @@
 #include "wake.h"
 #include "wifi_config.h"
 #include "config.h"
+#include "tusb.h"
 
 #ifndef WIFI_WAKE_UDP_PORT
 #define WIFI_WAKE_UDP_PORT 9
@@ -133,6 +134,8 @@ enum class LinkState { Idle, Connecting, Connected };
 //   three short flashes         a trigger packet arrived and was accepted
 //   one long flash (1.5 s)      the keystroke actually reached the USB stack
 //   two medium flashes          a trigger arrived but wake is off in the config
+//   four rapid flashes          the dongle was not on the USB bus; it attached
+//                               and the trigger will be retried
 //
 // The three-flash and the long flash are deliberately separate events. The
 // first only says the trigger was taken; the second says a keydown was
@@ -150,6 +153,7 @@ constexpr LedPattern LED_HEARTBEAT { 30,   0,   1 };
 constexpr LedPattern LED_TRIGGERED { 80,   90,  3 };
 constexpr LedPattern LED_KEY_SENT  { 1500, 0,   1 };
 constexpr LedPattern LED_REFUSED   { 400,  250, 2 };
+constexpr LedPattern LED_ATTACHING { 60,   60,  4 };
 #define LED_HEARTBEAT_INTERVAL_MS 5000
 
 LedPattern led_pattern {};
@@ -189,6 +193,13 @@ absolute_time_t join_deadline;
 // Set from the lwIP receive callback, consumed by wifi_wake_task(). The
 // callback runs in the cyw43 poll context, so it must not touch TinyUSB.
 volatile bool trigger_pending = false;
+
+// A trigger that arrives before the dongle is on the USB bus has to wait for
+// enumeration rather than being thrown away.
+#define TRIGGER_RETRIES  10
+#define TRIGGER_RETRY_MS 400
+uint8_t retries_left = 0;
+absolute_time_t retry_at;
 
 bool buffer_contains(const uint8_t *hay, size_t hay_len,
                      const char *needle, size_t needle_len) {
@@ -523,13 +534,14 @@ void report_status() {
 
     const int64_t idle_ms = absolute_time_diff_us(last_bt_input, get_absolute_time()) / 1000;
     printf("[wifi-wake] status: wifi=%s link=%s host=%s suspends=%lu resumes=%lu "
-           "controller=%s keys=%lu idle=%llds\n",
+           "controller=%s usb=%s keys=%lu idle=%llds\n",
            radio_up ? "up" : "down",
            link_state == LinkState::Connected ? "connected"
                : (link_state == LinkState::Connecting ? "connecting" : "idle"),
            wake_host_is_suspended() ? "suspended" : "awake",
            (unsigned long)wake_suspend_count(), (unsigned long)wake_resume_count(),
            bt_is_connected() ? "connected" : "none",
+           tud_mounted() ? "attached" : "detached",
            (unsigned long)wake_key_sent_count(),
            (long long)(idle_ms / 1000));
 }
@@ -544,8 +556,30 @@ void wifi_wake_task(void) {
         trigger_pending = false;
         // Report which way it went on the LED, because during a host sleep this
         // is the only thing anyone can see.
-        led_play(get_config().enable_wake ? LED_TRIGGERED : LED_REFUSED);
-        wake_request_from_network();
+        switch (wake_request_from_network()) {
+        case WAKE_NET_STARTED:
+            led_play(LED_TRIGGERED);
+            retries_left = 0;
+            break;
+        case WAKE_NET_DISABLED:
+            led_play(LED_REFUSED);
+            retries_left = 0;
+            break;
+        case WAKE_NET_NOT_ATTACHED:
+            // Enumeration takes a moment; come back and finish the job.
+            led_play(LED_ATTACHING);
+            retries_left = TRIGGER_RETRIES;
+            retry_at = make_timeout_time_ms(TRIGGER_RETRY_MS);
+            break;
+        }
+    } else if (retries_left > 0 &&
+               absolute_time_diff_us(get_absolute_time(), retry_at) <= 0) {
+        retries_left--;
+        retry_at = make_timeout_time_ms(TRIGGER_RETRY_MS);
+        if (wake_request_from_network() == WAKE_NET_STARTED) {
+            led_play(LED_TRIGGERED);
+            retries_left = 0;
+        }
     }
 
     if (!booted) {

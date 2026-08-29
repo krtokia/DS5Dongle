@@ -239,16 +239,22 @@ void wake_on_bt_input(const uint8_t *hid_input, uint16_t len) {
 // and settle handling: its handler fires the keystroke once the host is not
 // suspended, which covers both a host that resumed in response to the remote
 // wakeup below and a host that never suspended the bus at all.
-void wake_request_from_network(void) {
+wake_net_result_t wake_request_from_network(void) {
     // The keyboard interface is only enumerated while enable_wake is on
     // (see usb_descriptors.cpp), so without it there is nothing to send on.
     if (!get_config().enable_wake) {
         WAKE_DBG("network trigger ignored: enable_wake is off");
-        return;
+        return WAKE_NET_DISABLED;
     }
+
+    // The dongle only attaches to USB once a controller connects (bt.cpp), so
+    // after a boot with no controller it is not on the bus at all and there is
+    // no endpoint to write to. Attach now: that is worth doing on its own,
+    // since a host notices a device appearing.
     if (!tud_mounted()) {
-        WAKE_DBG("network trigger ignored: not enumerated");
-        return;
+        WAKE_DBG("network trigger: not attached, connecting");
+        tud_connect();
+        return WAKE_NET_NOT_ATTACHED;
     }
 
     if (host_suspended) {
@@ -265,14 +271,15 @@ void wake_request_from_network(void) {
     enter_state(WAKE_REQUESTED);
     critical_section_exit(&wake_cs);
     WAKE_DBG("network trigger -> REQUESTED");
+    return WAKE_NET_STARTED;
 }
 
 bool wake_host_is_suspended(void) {
     return host_suspended;
 }
 
-uint32_t wake_suspend_count(void) { return suspend_count; }
-uint32_t wake_resume_count(void)  { return resume_count; }
+uint32_t wake_suspend_count(void)  { return suspend_count; }
+uint32_t wake_resume_count(void)   { return resume_count; }
 uint32_t wake_key_sent_count(void) { return key_sent_count; }
 
 void wake_on_bt_disconnect(void) {
