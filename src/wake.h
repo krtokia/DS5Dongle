@@ -31,6 +31,14 @@ uint32_t wake_resume_count(void);
 // Keydowns actually accepted by the USB stack, as opposed to wake attempts
 // started. The gap between the two is where a wake can silently fail.
 uint32_t wake_key_sent_count(void);
+// Why a keystroke is or is not going out: the three conditions behind
+// tud_hid_n_ready() for the wake keyboard, and where the FSM is sitting.
+bool wake_kbd_ready(void);
+bool wake_kbd_endpoint_open(void);
+const char *wake_state_str(void);
+// Forces a clean re-enumeration. Recovers a wake keyboard endpoint left busy
+// by a transfer the host never collected.
+void wake_usb_reconnect(void);
 #else
 static inline void wake_init(void) {}
 static inline void wake_on_bt_connect(void) {}
@@ -44,6 +52,10 @@ static inline bool wake_host_is_suspended(void) { return false; }
 static inline uint32_t wake_suspend_count(void) { return 0; }
 static inline uint32_t wake_resume_count(void) { return 0; }
 static inline uint32_t wake_key_sent_count(void) { return 0; }
+static inline bool wake_kbd_ready(void) { return false; }
+static inline bool wake_kbd_endpoint_open(void) { return false; }
+static inline const char *wake_state_str(void) { return "n/a"; }
+static inline void wake_usb_reconnect(void) {}
 #endif
 
 #endif //DS5_BRIDGE_WAKE_H

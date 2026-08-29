@@ -201,6 +201,12 @@ volatile bool trigger_pending = false;
 uint8_t retries_left = 0;
 absolute_time_t retry_at;
 
+// How long to give a started trigger before concluding the endpoint is stuck.
+#define KEY_WAIT_MS 2500
+uint32_t keys_before_trigger = 0;
+absolute_time_t recover_at;
+bool recovery_armed = false;
+
 bool buffer_contains(const uint8_t *hay, size_t hay_len,
                      const char *needle, size_t needle_len) {
     if (needle_len == 0 || hay_len < needle_len) return false;
@@ -534,7 +540,7 @@ void report_status() {
 
     const int64_t idle_ms = absolute_time_diff_us(last_bt_input, get_absolute_time()) / 1000;
     printf("[wifi-wake] status: wifi=%s link=%s host=%s suspends=%lu resumes=%lu "
-           "controller=%s usb=%s keys=%lu idle=%llds\n",
+           "controller=%s usb=%s hid=%s state=%s keys=%lu idle=%llds\n",
            radio_up ? "up" : "down",
            link_state == LinkState::Connected ? "connected"
                : (link_state == LinkState::Connecting ? "connecting" : "idle"),
@@ -542,6 +548,8 @@ void report_status() {
            (unsigned long)wake_suspend_count(), (unsigned long)wake_resume_count(),
            bt_is_connected() ? "connected" : "none",
            tud_mounted() ? "attached" : "detached",
+           wake_kbd_ready() ? "ready" : (wake_kbd_endpoint_open() ? "busy" : "closed"),
+           wake_state_str(),
            (unsigned long)wake_key_sent_count(),
            (long long)(idle_ms / 1000));
 }
@@ -560,6 +568,12 @@ void wifi_wake_task(void) {
         case WAKE_NET_STARTED:
             led_play(LED_TRIGGERED);
             retries_left = 0;
+            // If no keystroke follows, the keyboard endpoint is stuck on a
+            // transfer the host never collected, and only re-enumerating
+            // clears it. Watch for that rather than sitting on it.
+            keys_before_trigger = wake_key_sent_count();
+            recover_at = make_timeout_time_ms(KEY_WAIT_MS);
+            recovery_armed = true;
             break;
         case WAKE_NET_DISABLED:
             led_play(LED_REFUSED);
@@ -571,6 +585,18 @@ void wifi_wake_task(void) {
             retries_left = TRIGGER_RETRIES;
             retry_at = make_timeout_time_ms(TRIGGER_RETRY_MS);
             break;
+        }
+    } else if (recovery_armed &&
+               absolute_time_diff_us(get_absolute_time(), recover_at) <= 0) {
+        recovery_armed = false;
+        if (wake_key_sent_count() == keys_before_trigger) {
+            printf("[wifi-wake] no keystroke after trigger (hid=%s state=%s); "
+                   "re-enumerating\n",
+                   wake_kbd_ready() ? "ready" : "not-ready", wake_state_str());
+            led_play(LED_ATTACHING);
+            wake_usb_reconnect();
+            retries_left = TRIGGER_RETRIES;
+            retry_at = make_timeout_time_ms(TRIGGER_RETRY_MS);
         }
     } else if (retries_left > 0 &&
                absolute_time_diff_us(get_absolute_time(), retry_at) <= 0) {

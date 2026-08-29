@@ -50,6 +50,17 @@ static const char *wake_state_name(int s) {
 }
 #else
 #  define WAKE_DBG(fmt, ...) ((void)0)
+static const char *wake_state_name(int s) {
+    switch (s) {
+    case 0: return "IDLE";
+    case 1: return "PENDING_PRESS";
+    case 2: return "REQUESTED";
+    case 3: return "KEY_DOWN";
+    case 4: return "KEY_UP_SENT";
+    case 5: return "DONE";
+    default: return "?";
+    }
+}
 #endif
 
 typedef enum {
@@ -272,6 +283,29 @@ wake_net_result_t wake_request_from_network(void) {
     critical_section_exit(&wake_cs);
     WAKE_DBG("network trigger -> REQUESTED");
     return WAKE_NET_STARTED;
+}
+
+bool wake_kbd_ready(void) {
+    return tud_hid_n_ready(WAKE_KBD_INSTANCE);
+}
+
+// tud_hid_n_ready() folds three conditions together; this separates out the one
+// that says the host actually opened the interface, so a stuck endpoint can be
+// told apart from an interface that was never configured.
+bool wake_kbd_endpoint_open(void) {
+    return tud_mounted() && !tud_suspended();
+}
+
+const char *wake_state_str(void) {
+    return wake_state_name(state);
+}
+
+void wake_usb_reconnect(void) {
+    WAKE_DBG("forcing USB reconnect");
+    wake_note_usb_reconnect();
+    tud_disconnect();
+    sleep_ms(150);
+    tud_connect();
 }
 
 bool wake_host_is_suspended(void) {
