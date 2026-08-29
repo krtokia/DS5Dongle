@@ -44,10 +44,29 @@
 // Longest datagram worth inspecting. The trigger is a short string.
 #define RX_BUF_SIZE 256
 
+// The main loop runs under a 1 s watchdog and also pumps the Bluetooth audio
+// path, so any call here that blocks is a defect. Time the ones that reach the
+// CYW43 and say so when they run long, because the failure mode otherwise is a
+// silent watchdog reset that looks like a USB enumeration failure.
+#define SLOW_CALL_WARN_MS  100
+
+#define TIMED(label, call)                                                      \
+    do {                                                                        \
+        const uint64_t _t0 = time_us_64();                                      \
+        call;                                                                   \
+        const uint32_t _ms = (uint32_t)((time_us_64() - _t0) / 1000);           \
+        if (_ms >= SLOW_CALL_WARN_MS) {                                         \
+            printf("[wifi-wake] SLOW: %s took %lu ms\n", label, (unsigned long)_ms); \
+        } else {                                                                \
+            printf("[wifi-wake] %s took %lu ms\n", label, (unsigned long)_ms);  \
+        }                                                                       \
+    } while (0)
+
 #define POLL_INTERVAL_MS   500
 #define JOIN_TIMEOUT_MS    20000
 #define RETRY_DELAY_MS     5000
 #define IGNORED_REPORT_INTERVAL_MS 5000
+#define FIRST_JOIN_DELAY_MS 5000
 
 namespace {
 
@@ -127,7 +146,8 @@ bool listener_start(void) {
 
 void begin_connect(void) {
     printf("[wifi-wake] connecting to \"%s\"\n", ssid);
-    const int err = cyw43_arch_wifi_connect_async(ssid, password, CYW43_AUTH_WPA2_AES_PSK);
+    int err;
+    TIMED("cyw43_arch_wifi_connect_async", err = cyw43_arch_wifi_connect_async(ssid, password, CYW43_AUTH_WPA2_AES_PSK));
     if (err != 0) {
         printf("[wifi-wake] could not start association (%d)\n", err);
         link_state = LinkState::Idle;
@@ -148,7 +168,13 @@ void link_task(void) {
         return;
     }
 
-    const int status = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
+    int status;
+    const uint64_t t0 = time_us_64();
+    status = cyw43_tcpip_link_status(&cyw43_state, CYW43_ITF_STA);
+    const uint32_t poll_ms = (uint32_t)((time_us_64() - t0) / 1000);
+    if (poll_ms >= SLOW_CALL_WARN_MS) {
+        printf("[wifi-wake] SLOW: cyw43_tcpip_link_status took %lu ms\n", (unsigned long)poll_ms);
+    }
     next_action = make_timeout_time_ms(POLL_INTERVAL_MS);
 
     if (status == CYW43_LINK_UP) {
@@ -185,6 +211,7 @@ void link_task(void) {
 } // namespace
 
 void wifi_wake_init(void) {
+    printf("[wifi-wake] init\n");
     have_credentials = wifi_config_load(ssid, sizeof(ssid), password, sizeof(password));
     if (!have_credentials) {
         printf("[wifi-wake] no credentials in this image; network wake is inactive.\n"
@@ -192,7 +219,8 @@ void wifi_wake_init(void) {
         return;
     }
 
-    cyw43_arch_enable_sta_mode();
+    printf("[wifi-wake] bringing up station mode\n");
+    TIMED("cyw43_arch_enable_sta_mode", cyw43_arch_enable_sta_mode());
     netif_set_hostname(netif_default, WIFI_WAKE_HOSTNAME);
 
     uint8_t mac[6];
@@ -202,7 +230,13 @@ void wifi_wake_init(void) {
     }
 
     listener_start();
-    next_action = get_absolute_time();
+
+    // Deliberately NOT get_absolute_time(): that made the very first loop
+    // iteration issue the join, immediately after watchdog_enable(1000). The
+    // delay is diagnostic only - it lets USB enumerate first so a slow join is
+    // visible in the log instead of resetting the board before anything prints.
+    next_action = make_timeout_time_ms(FIRST_JOIN_DELAY_MS);
+    printf("[wifi-wake] init done, first join in %d ms\n", FIRST_JOIN_DELAY_MS);
 }
 
 void wifi_wake_task(void) {

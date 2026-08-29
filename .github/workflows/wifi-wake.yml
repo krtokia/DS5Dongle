@@ -25,8 +25,23 @@ env:
 
 jobs:
   build:
-    name: Build .uf2 (ENABLE_WIFI_WAKE=ON)
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Build .uf2 (ENABLE_WIFI_WAKE=ON)
+            artifact: ds5-bridge-wifi-wake
+            cmake_args: -DENABLE_WIFI_WAKE=ON
+          # Diagnostic build. ENABLE_SERIAL routes printf to a USB CDC port, so
+          # logs need no UART adapter - and it also leaves the 1 s watchdog
+          # disabled, which makes this an A/B test for whether a watchdog reset
+          # is what breaks USB enumeration.
+          - name: Build .uf2 (diagnostic, USB serial log)
+            artifact: ds5-bridge-wifi-wake-debug
+            cmake_args: -DENABLE_WIFI_WAKE=ON -DENABLE_SERIAL=ON -DWAKE_DEBUG=ON
 
     steps:
       - name: Checkout
@@ -82,7 +97,7 @@ jobs:
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DPICO_SDK_PATH="$PICO_SDK_PATH" \
-            -DENABLE_WIFI_WAKE=ON \
+            ${{ matrix.cmake_args }} \
             -DVERSION="wifi-wake-${GITHUB_SHA::7}"
           cmake --build build --target ds5-bridge
 
@@ -93,8 +108,8 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p dist
-          cp build/ds5-bridge.uf2 dist/ds5-bridge-wifi-wake.uf2
-          cp build/ds5-bridge.elf dist/ds5-bridge-wifi-wake.elf
+          cp build/ds5-bridge.uf2 "dist/${{ matrix.artifact }}.uf2"
+          cp build/ds5-bridge.elf "dist/${{ matrix.artifact }}.elf"
           # Shipped with the firmware so the .uf2 and the tool that configures
           # it always come from the same commit.
           cp tools/uf2-wifi-config.html dist/
@@ -103,6 +118,6 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: ds5-bridge-wifi-wake-${{ github.sha }}
+          name: ${{ matrix.artifact }}-${{ github.sha }}
           path: dist/
           if-no-files-found: error
