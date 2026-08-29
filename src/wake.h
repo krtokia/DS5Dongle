@@ -5,6 +5,7 @@
 #ifndef DS5_BRIDGE_WAKE_H
 #define DS5_BRIDGE_WAKE_H
 
+#include <cstddef>
 #include <cstdint>
 
 #ifdef ENABLE_WAKE_HID
@@ -35,6 +36,7 @@ uint32_t wake_key_sent_count(void);
 // tud_hid_n_ready() for the wake keyboard, and where the FSM is sitting.
 bool wake_kbd_ready(void);
 bool wake_kbd_endpoint_open(void);
+void wake_hid_summary(char *buf, size_t len);
 const char *wake_state_str(void);
 // Forces a clean re-enumeration. Recovers a wake keyboard endpoint left busy
 // by a transfer the host never collected.
@@ -54,6 +56,7 @@ static inline uint32_t wake_resume_count(void) { return 0; }
 static inline uint32_t wake_key_sent_count(void) { return 0; }
 static inline bool wake_kbd_ready(void) { return false; }
 static inline bool wake_kbd_endpoint_open(void) { return false; }
+static inline void wake_hid_summary(char *buf, size_t len) { if (len) buf[0] = 0; }
 static inline const char *wake_state_str(void) { return "n/a"; }
 static inline void wake_usb_reconnect(void) {}
 #endif

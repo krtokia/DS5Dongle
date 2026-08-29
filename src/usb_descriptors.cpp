@@ -444,6 +444,15 @@ uint8_t descriptor_configuration[] = {
 // Invoked when received GET CONFIGURATION DESCRIPTOR
 // Application return pointer to descriptor
 // Descriptor contents must exist long enough for transfer to complete
+// Diagnostics for the wake keyboard: how many times the host has read the
+// configuration descriptor, and whether the last read included the keyboard
+// interface. See wake.cpp.
+static volatile uint16_t desc_cfg_reads = 0;
+static volatile bool desc_cfg_kbd = false;
+
+bool wake_desc_advertised_kbd(void) { return desc_cfg_kbd; }
+uint16_t wake_desc_config_reads(void) { return desc_cfg_reads; }
+
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     (void) index; // for multiple configurations
     auto bInterval = 0x01;
@@ -472,6 +481,11 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     // OR the Game Bar shortcut is on. With both off this is byte-identical to the base.
     const bool wake = get_config().enable_wake;
     const bool kbd = wake || get_config().ps_shortcut_enabled;
+    // Recorded so the wake code can report what the host was actually offered.
+    // A keyboard that never appears on the bus and one whose endpoint is stuck
+    // look identical from the HID side; this separates them.
+    desc_cfg_reads++;
+    desc_cfg_kbd = kbd;
     descriptor_configuration[7] = wake ? 0xE0 : 0xC0; // bmAttributes (REMOTE_WAKEUP bit)
     const uint16_t total = kbd ? CONFIG_DESC_LEN_TOTAL
                                : (uint16_t) (CONFIG_DESC_LEN_TOTAL - CONFIG_DESC_LEN_WAKE_KBD);

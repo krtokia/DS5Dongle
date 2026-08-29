@@ -207,6 +207,20 @@ uint32_t keys_before_trigger = 0;
 absolute_time_t recover_at;
 bool recovery_armed = false;
 
+// The keyboard interface comes up unusable on the enumeration that follows a
+// cold boot: tud_hid_n_ready() is false from the first status line onwards,
+// with nothing ever sent on the endpoint, and only a detach/attach clears it.
+// Discovering that costs the first wake packet -- exactly the one that matters,
+// since by then the host is asleep and nobody is watching. So check while
+// nothing is at stake and fix it up front. Bounded, because a re-enumeration
+// itself produces a fresh mount and must not feed itself.
+#define PRIME_DELAY_MS   6000
+#define PRIME_MAX_TRIES  2
+absolute_time_t prime_at;
+bool prime_armed = false;
+uint8_t primes_left = PRIME_MAX_TRIES;
+bool usb_was_mounted = false;
+
 bool buffer_contains(const uint8_t *hay, size_t hay_len,
                      const char *needle, size_t needle_len) {
     if (needle_len == 0 || hay_len < needle_len) return false;
@@ -539,8 +553,10 @@ void report_status() {
     next_report = make_timeout_time_ms(STATUS_INTERVAL_MS);
 
     const int64_t idle_ms = absolute_time_diff_us(last_bt_input, get_absolute_time()) / 1000;
+    char hid[64];
+    wake_hid_summary(hid, sizeof(hid));
     printf("[wifi-wake] status: wifi=%s link=%s host=%s suspends=%lu resumes=%lu "
-           "controller=%s usb=%s hid=%s state=%s keys=%lu idle=%llds\n",
+           "controller=%s usb=%s hid=%s(%s) state=%s keys=%lu idle=%llds\n",
            radio_up ? "up" : "down",
            link_state == LinkState::Connected ? "connected"
                : (link_state == LinkState::Connecting ? "connecting" : "idle"),
@@ -549,6 +565,7 @@ void report_status() {
            bt_is_connected() ? "connected" : "none",
            tud_mounted() ? "attached" : "detached",
            wake_kbd_ready() ? "ready" : (wake_kbd_endpoint_open() ? "busy" : "closed"),
+           hid,
            wake_state_str(),
            (unsigned long)wake_key_sent_count(),
            (long long)(idle_ms / 1000));
@@ -556,9 +573,41 @@ void report_status() {
 
 
 
+// Watches the USB attach edge and, once settled, makes sure the wake keyboard is
+// actually usable -- forcing one re-enumeration if it is not.
+void prime_keyboard(void) {
+    const bool mounted = tud_mounted();
+    if (mounted && !usb_was_mounted) {
+        prime_at = make_timeout_time_ms(PRIME_DELAY_MS);
+        prime_armed = true;
+    }
+    usb_was_mounted = mounted;
+
+    if (!prime_armed || !mounted) return;
+    if (absolute_time_diff_us(get_absolute_time(), prime_at) > 0) return;
+    prime_armed = false;
+
+    if (wake_kbd_ready()) return;          // nothing to fix
+    // With wake off the keyboard is deliberately absent from the configuration
+    // descriptor, so "not ready" is correct and re-enumerating fixes nothing.
+    if (!get_config().enable_wake) return;
+    if (primes_left == 0) return;          // already tried; don't loop on it
+    if (bt_is_connected()) return;         // a re-enumeration would blip the pad
+    primes_left--;
+
+    char why[64];
+    wake_hid_summary(why, sizeof(why));
+    printf("[wifi-wake] wake keyboard unusable after enumeration (%s); "
+           "re-enumerating now so the first trigger isn't wasted "
+           "-- the USB serial log drops here, reconnect it\n", why);
+    sleep_ms(50);
+    wake_usb_reconnect();
+}
+
 void wifi_wake_task(void) {
     if (!credentials_ok) return;
     report_status();
+    prime_keyboard();
 
     if (trigger_pending) {
         trigger_pending = false;
@@ -590,10 +639,14 @@ void wifi_wake_task(void) {
                absolute_time_diff_us(get_absolute_time(), recover_at) <= 0) {
         recovery_armed = false;
         if (wake_key_sent_count() == keys_before_trigger) {
-            printf("[wifi-wake] no keystroke after trigger (hid=%s state=%s); "
-                   "re-enumerating\n",
-                   wake_kbd_ready() ? "ready" : "not-ready", wake_state_str());
+            char why[64];
+            wake_hid_summary(why, sizeof(why));
+            printf("[wifi-wake] no keystroke after trigger (hid=%s %s state=%s); "
+                   "re-enumerating -- the USB serial log drops here, reconnect it\n",
+                   wake_kbd_ready() ? "ready" : "not-ready", why, wake_state_str());
             led_play(LED_ATTACHING);
+            // Give stdio a moment to push that line out before the bus goes away.
+            sleep_ms(50);
             wake_usb_reconnect();
             retries_left = TRIGGER_RETRIES;
             retry_at = make_timeout_time_ms(TRIGGER_RETRY_MS);

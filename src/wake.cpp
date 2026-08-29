@@ -16,8 +16,19 @@
 #include "ps_shortcut.h"
 #include "config.h"
 
+// Defined in usb_descriptors.cpp: what the host was last offered.
+bool wake_desc_advertised_kbd(void);
+uint16_t wake_desc_config_reads(void);
 
-#define WAKE_KBD_INSTANCE     1
+
+// TinyUSB hands out HID instance indices in the order hidd_open() claims the
+// interfaces, so the wake keyboard's index depends on what else is in the
+// configuration (the CDC log interface sits between them in serial builds).
+// Look it up instead of assuming. Only the wake keyboard declares the boot
+// keyboard protocol, and tud_hid_n_interface_protocol() is non-zero only once
+// hidd_open() has claimed the interface AND opened its endpoint -- so "not
+// found" and "found but not ready" are two genuinely different faults.
+#define WAKE_KBD_NONE         0xFF
 #define WAKE_KEYCODE_F15      0x68
 // Post-resume timings tuned for "wake-and-resleep" Windows behavior: the host
 // resumes USB, but if no HID input is consumed during the brief wake window
@@ -28,6 +39,24 @@
 #define WAKE_KEY_UP_SETTLE_US 200000   // 200 ms between attempts (or before DONE)
 #define WAKE_REQUEST_TIMEOUT_US 5000000
 #define WAKE_KEY_ATTEMPTS     2
+
+static uint8_t kbd_instance(void) {
+    for (uint8_t i = 0; i < CFG_TUD_HID; i++) {
+        if (tud_hid_n_interface_protocol(i) == HID_ITF_PROTOCOL_KEYBOARD) return i;
+    }
+    return WAKE_KBD_NONE;
+}
+
+static bool kbd_ready(void) {
+    const uint8_t i = kbd_instance();
+    return i != WAKE_KBD_NONE && tud_hid_n_ready(i);
+}
+
+// rpt is always an 8-byte boot keyboard report.
+static bool kbd_send(const uint8_t *rpt) {
+    const uint8_t i = kbd_instance();
+    return i != WAKE_KBD_NONE && tud_hid_n_report(i, 0, rpt, 8);
+}
 #define WAKE_DISCONNECT_DEBOUNCE_US 3000000  // 3s: only disconnect (and thereby power off) the
                                              // controller after a sustained suspend; ignore brief
                                              // hub-induced suspends while the host is awake.
@@ -286,14 +315,37 @@ wake_net_result_t wake_request_from_network(void) {
 }
 
 bool wake_kbd_ready(void) {
-    return tud_hid_n_ready(WAKE_KBD_INSTANCE);
+    return kbd_ready();
 }
 
-// tud_hid_n_ready() folds three conditions together; this separates out the one
-// that says the host actually opened the interface, so a stuck endpoint can be
-// told apart from an interface that was never configured.
+// tud_hid_n_ready() folds three conditions together and reports only their AND,
+// which is why a keyboard that never sends is indistinguishable from one that is
+// merely between transfers. Split it: this says the host opened the interface and
+// TinyUSB has an IN endpoint for it, so "endpoint stuck on an uncollected
+// transfer" can be told apart from "interface never configured at all".
 bool wake_kbd_endpoint_open(void) {
-    return tud_mounted() && !tud_suspended();
+    return kbd_instance() != WAKE_KBD_NONE;
+}
+
+// Writes what every HID instance currently looks like, e.g. "kbd=1 proto=[0,1]".
+// Instance protocols come straight out of hidd_open(), so this is the ground
+// truth for whether the keyboard interface exists on the bus at all.
+void wake_hid_summary(char *buf, size_t len) {
+    const uint8_t kbd = kbd_instance();
+    int n = snprintf(buf, len, "kbd=");
+    if (kbd == WAKE_KBD_NONE) {
+        n += snprintf(buf + n, (size_t)((int)len - n), "none");
+    } else {
+        n += snprintf(buf + n, (size_t)((int)len - n), "%u", (unsigned)kbd);
+    }
+    n += snprintf(buf + n, (size_t)((int)len - n), " proto=[");
+    for (uint8_t i = 0; i < CFG_TUD_HID && n < (int)len; i++) {
+        n += snprintf(buf + n, (size_t)((int)len - n), i ? ",%u" : "%u",
+                      (unsigned)tud_hid_n_interface_protocol(i));
+    }
+    snprintf(buf + n, (size_t)((int)len - n), "] cfgdesc=%s/%u",
+             wake_desc_advertised_kbd() ? "kbd-in" : "kbd-out",
+             (unsigned)wake_desc_config_reads());
 }
 
 const char *wake_state_str(void) {
@@ -356,7 +408,7 @@ void wake_task(void) {
             if (host_resumed_event || !host_suspended) {
                 host_resumed_event = false;
                 if (now - entered < WAKE_SETTLE_US) return;
-                if (!tud_hid_n_ready(WAKE_KBD_INSTANCE)) {
+                if (!kbd_ready()) {
 #ifdef WAKE_DEBUG
                     static uint64_t last_log = 0;
                     if (now - last_log > 1000000) {
@@ -367,7 +419,7 @@ void wake_task(void) {
                     return;
                 }
                 uint8_t rpt[8] = { 0, 0, WAKE_KEYCODE_F15, 0, 0, 0, 0, 0 };
-                const bool sent = tud_hid_n_report(WAKE_KBD_INSTANCE, 0, rpt, sizeof(rpt));
+                const bool sent = kbd_send(rpt);
                 WAKE_DBG("REQUESTED: sent keydown 0x%02X -> %d", WAKE_KEYCODE_F15, (int)sent);
                 if (sent) {
                     key_sent_count++;
@@ -386,7 +438,7 @@ void wake_task(void) {
 
         case WAKE_KEY_DOWN: {
             if (now - entered < WAKE_KEY_HOLD_US) return;
-            if (!tud_hid_n_ready(WAKE_KBD_INSTANCE)) {
+            if (!kbd_ready()) {
 #ifdef WAKE_DEBUG
                 static uint64_t last_log = 0;
                 if (now - last_log > 1000000) {
@@ -397,7 +449,7 @@ void wake_task(void) {
                 return;
             }
             uint8_t up[8] = { 0 };
-            const bool sent = tud_hid_n_report(WAKE_KBD_INSTANCE, 0, up, sizeof(up));
+            const bool sent = kbd_send(up);
             WAKE_DBG("KEY_DOWN: sent keyup -> %d", (int)sent);
             if (sent) {
                 critical_section_enter_blocking(&wake_cs);
@@ -416,7 +468,7 @@ void wake_task(void) {
                 // host woke once; just send another keydown directly. If the
                 // host has dipped back into suspend, tud_hid_n_ready will be
                 // false and we'll heartbeat from KEY_DOWN until it returns.
-                if (!tud_hid_n_ready(WAKE_KBD_INSTANCE)) {
+                if (!kbd_ready()) {
 #ifdef WAKE_DEBUG
                     static uint64_t last_log = 0;
                     if (now - last_log > 1000000) {
@@ -427,7 +479,7 @@ void wake_task(void) {
                     return;
                 }
                 uint8_t rpt[8] = { 0, 0, WAKE_KEYCODE_F15, 0, 0, 0, 0, 0 };
-                const bool sent = tud_hid_n_report(WAKE_KBD_INSTANCE, 0, rpt, sizeof(rpt));
+                const bool sent = kbd_send(rpt);
                 WAKE_DBG("KEY_UP_SENT: retrying F15 (attempt %d/%d) -> %d",
                          (int)key_attempts + 1, (int)WAKE_KEY_ATTEMPTS, (int)sent);
                 if (sent) {
