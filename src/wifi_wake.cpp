@@ -133,8 +133,11 @@ enum class LinkState { Idle, Connecting, Connected };
 //   three short flashes         a trigger packet arrived and the key was sent
 //   one long flash              a trigger arrived but wake is off in the config
 //
-// A pattern owns the LED until it finishes; outside one nothing is written, so
-// the battery and inquiry indicators keep it the rest of the time.
+// A flash is always a change from whatever the LED was already showing, and the
+// previous state is restored when the pattern ends. bt.cpp holds the LED on
+// while a controller is connected, so against that a flash reads as a blink
+// out rather than in - either way it is visible, and either way the indicator
+// it borrowed the LED from gets it back.
 struct LedPattern { uint16_t on_ms; uint16_t off_ms; uint8_t flashes; };
 constexpr LedPattern LED_HEARTBEAT { 30,   0,   1 };
 constexpr LedPattern LED_TRIGGERED { 80,   90,  3 };
@@ -143,14 +146,17 @@ constexpr LedPattern LED_REFUSED   { 700,  0,   1 };
 
 LedPattern led_pattern {};
 uint8_t led_flashes_left = 0;
-bool led_on = false;
+bool led_flashing = false;
+bool led_baseline = false;
 absolute_time_t led_next_change;
 absolute_time_t led_next_heartbeat;
 
 void led_play(const LedPattern &p) {
+    if (led_flashes_left != 0) return;   // let the running pattern finish
+    led_baseline = cyw43_arch_gpio_get(CYW43_WL_GPIO_LED_PIN);
     led_pattern = p;
     led_flashes_left = p.flashes;
-    led_on = false;
+    led_flashing = false;
     led_next_change = get_absolute_time();
 }
 
@@ -440,15 +446,15 @@ void wifi_wake_led_tick(void) {
 
     if (absolute_time_diff_us(now, led_next_change) > 0) return;
 
-    if (!led_on) {
-        led_on = true;
-        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
+    if (!led_flashing) {
+        led_flashing = true;
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, !led_baseline);
         led_next_change = make_timeout_time_ms(led_pattern.on_ms);
         return;
     }
 
-    led_on = false;
-    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
+    led_flashing = false;
+    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, led_baseline);
     led_flashes_left--;
     if (led_flashes_left > 0) {
         led_next_change = make_timeout_time_ms(led_pattern.off_ms);
