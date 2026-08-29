@@ -42,6 +42,13 @@ jobs:
           - name: Build .uf2 (diagnostic, USB serial log)
             artifact: ds5-bridge-wifi-wake-debug
             cmake_args: -DENABLE_WIFI_WAKE=ON -DENABLE_SERIAL=ON -DWAKE_DEBUG=ON
+          # Bisect build: the IP stack is linked and the cyw43_arch backend is
+          # swapped, but none of the Wi-Fi wake code is compiled in. If the
+          # controller fails to attach on this too, the cause is the build
+          # configuration and not anything this fork runs.
+          - name: Build .uf2 (bisect, lwIP linked but no feature code)
+            artifact: ds5-bridge-stack-only
+            cmake_args: -DWIFI_STACK_ONLY=ON
 
     steps:
       - name: Checkout

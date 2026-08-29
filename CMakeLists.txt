@@ -288,7 +288,7 @@ endif()
 target_compile_definitions(bs2_default PRIVATE PICO_FLASH_SPI_CLKDIV=${PICO_FLASH_SPI_CLKDIV})
 target_compile_definitions(ds5-bridge PRIVATE PICO_EMBED_XIP_SETUP=1)
 target_compile_definitions(ds5-bridge PRIVATE
-        CYW43_LWIP=$<BOOL:${ENABLE_WIFI_WAKE}>
+        CYW43_LWIP=$<OR:$<BOOL:${ENABLE_WIFI_WAKE}>,$<BOOL:${WIFI_STACK_ONLY}>>
         ENABLE_SERIAL=${ENABLE_SERIAL_VALUE}
         # 0 (not 1): flash_safe_execute() must really park core1 while flash is
         # accessed - both config_save() and the BOOTSEL CSn float poll. core1_entry
@@ -322,6 +322,14 @@ target_sources(ds5-bridge PRIVATE
 # of the CYW43439 alongside Bluetooth, which costs ~18 KB of RAM and makes the two
 # share the radio.
 option(ENABLE_WIFI_WAKE "Wake the host from a UDP packet over Wi-Fi" OFF)
+
+# Diagnostic only. Links the IP stack and swaps the cyw43_arch backend exactly
+# as ENABLE_WIFI_WAKE does, but compiles none of the feature's own code, so
+# nothing of it can run. A build like this behaving differently from a stock one
+# isolates the cause to the build configuration rather than to anything this
+# fork does at runtime.
+option(WIFI_STACK_ONLY "Link lwIP but compile in none of the Wi-Fi wake code" OFF)
+
 if (ENABLE_WIFI_WAKE)
     target_compile_definitions(ds5-bridge PRIVATE ENABLE_WIFI_WAKE)
     target_sources(ds5-bridge PRIVATE
@@ -377,7 +385,7 @@ target_link_libraries(ds5-bridge
         hardware_flash
         pico_btstack_classic
 #        pico_cyw43_arch_threadsafe_background
-        $<IF:$<BOOL:${ENABLE_WIFI_WAKE}>,pico_cyw43_arch_lwip_poll,pico_cyw43_arch_poll>
+        $<IF:$<OR:$<BOOL:${ENABLE_WIFI_WAKE}>,$<BOOL:${WIFI_STACK_ONLY}>>,pico_cyw43_arch_lwip_poll,pico_cyw43_arch_poll>
         pico_btstack_cyw43
         tinyusb_device
         tinyusb_board
