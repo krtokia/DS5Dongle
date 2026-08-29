@@ -49,6 +49,14 @@ jobs:
           - name: Build .uf2 (bisect, lwIP linked but no feature code)
             artifact: ds5-bridge-stack-only
             cmake_args: -DWIFI_STACK_ONLY=ON
+          # Same two builds again with 4 KB stacks instead of 2 KB, testing
+          # whether the failure is stack exhaustion in the polling path.
+          - name: Build .uf2 (4 KB stacks, full feature)
+            artifact: ds5-bridge-wifi-wake-bigstack
+            cmake_args: -DENABLE_WIFI_WAKE=ON -DLARGER_STACKS=ON
+          - name: Build .uf2 (4 KB stacks, bisect)
+            artifact: ds5-bridge-stack-only-bigstack
+            cmake_args: -DWIFI_STACK_ONLY=ON -DLARGER_STACKS=ON
 
     steps:
       - name: Checkout

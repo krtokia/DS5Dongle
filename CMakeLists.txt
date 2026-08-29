@@ -351,6 +351,19 @@ if (ENABLE_WIFI_WAKE)
     endif ()
 endif ()
 
+# Both stacks are 2 KB by default and live in the RP2350's two 4 KB scratch
+# banks, which nothing else in this firmware uses. The main loop already
+# descends through btstack, TinyUSB and the audio path; linking lwIP adds its
+# worker to cyw43_arch_poll() on top of that, so the headroom is worth
+# questioning. Doubling them fills the banks exactly and costs no main SRAM.
+option(LARGER_STACKS "Give both cores 4 KB of stack instead of 2 KB" OFF)
+if (LARGER_STACKS)
+    target_compile_definitions(ds5-bridge PRIVATE
+            PICO_STACK_SIZE=4096
+            PICO_CORE1_STACK_SIZE=4096
+    )
+endif ()
+
 option(WAKE_DEBUG "Print wake-FSM transitions to UART (developer use)" OFF)
 if(WAKE_DEBUG)
     target_compile_definitions(ds5-bridge PRIVATE
