@@ -33,6 +33,10 @@ std::vector<uint8_t> get_feature_data(uint8_t reportId,uint16_t len);
 void init_feature();
 void set_feature_data(uint8_t reportId, uint8_t* data,uint16_t len);
 void bt_inquiring_led();
+// Trades how fast a controller attaches against how much of the shared 2.4 GHz
+// radio is left for Wi-Fi. See the definition in bt.cpp.
+void bt_set_page_scan_fast(bool fast);
+void bt_set_discoverable(bool on);
 // BOOTSEL button actions, dispatched from button_functions.cpp.
 void bt_bootsel_click_action();
 void bt_bootsel_hold_action();

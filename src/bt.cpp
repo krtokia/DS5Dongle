@@ -119,6 +119,32 @@ bool bt_disconnect() {
     return true;
 }
 
+// Page scan is normally configured with interval == window (11.25 ms), meaning
+// the radio receives continuously so a controller attaches the instant it is
+// switched on. Bluetooth and Wi-Fi share one CYW43439 radio, and at that duty
+// cycle a Wi-Fi scan never gets the airtime to hear the AP - it comes back
+// with CYW43_LINK_NONET as though the network did not exist.
+//
+// Stretching the interval to 1.28 s while keeping the same window drops the
+// duty cycle to roughly 1%, which is an ordinary Bluetooth page scan rate. A
+// controller then takes up to about a second longer to attach, which only
+// matters while Wi-Fi is up - and Wi-Fi is only up when no controller is
+// connected.
+void bt_set_page_scan_fast(bool fast) {
+    if (fast) {
+        gap_set_page_scan_activity(0x0012, 0x0012);   // 11.25 ms / 11.25 ms
+    } else {
+        gap_set_page_scan_activity(0x0800, 0x0012);   // 1.28 s / 11.25 ms
+    }
+    gap_set_page_scan_type(PAGE_SCAN_MODE_INTERLACED);
+}
+
+// Inquiry scan costs airtime too. It is only needed for a controller to find
+// this dongle for a first pairing; an already paired one uses page scan.
+void bt_set_discoverable(bool on) {
+    gap_discoverable_control(on ? 1 : 0);
+}
+
 bool bt_is_connected() {
     return hid_interrupt_cid != 0;
 }

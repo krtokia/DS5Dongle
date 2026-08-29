@@ -53,8 +53,10 @@
 #define RX_BUF_SIZE 256
 
 #define POLL_INTERVAL_MS    500
-#define JOIN_TIMEOUT_MS     20000
-#define RETRY_DELAY_MS      5000
+// Kept short: the Bluetooth side is quietened for the duration of an attempt,
+// so a controller is slower to attach while one is running.
+#define JOIN_TIMEOUT_MS     8000
+#define RETRY_DELAY_MS      10000
 #define IGNORED_REPORT_INTERVAL_MS 5000
 
 // Let USB enumerate and the initial Bluetooth inquiry settle before touching
@@ -191,6 +193,8 @@ bool listener_start() {
 void radio_bring_up() {
     WatchdogRelax relax;
     printf("[wifi-wake] controller idle -> bringing Wi-Fi up\n");
+    // Slow the page scan for as long as Wi-Fi holds the radio.
+    bt_set_page_scan_fast(false);
     TIMED("cyw43_arch_enable_sta_mode", cyw43_arch_enable_sta_mode());
 
     if (netif_default != nullptr) {
@@ -214,13 +218,20 @@ void radio_bring_down() {
     WatchdogRelax relax;
     printf("[wifi-wake] controller connected -> taking Wi-Fi down\n");
     TIMED("cyw43_arch_disable_sta_mode", cyw43_arch_disable_sta_mode());
+    // Bluetooth gets the radio back at full rate.
+    bt_set_page_scan_fast(true);
+    bt_set_discoverable(true);
     radio_up = false;
     link_state = LinkState::Idle;
 }
 
 void begin_connect() {
     WatchdogRelax relax;
-    printf("[wifi-wake] connecting to \"%s\"\n", ssid);
+    // Give the scan as much of the radio as possible: a scan has to dwell on
+    // each channel, and it is the part that fails when Bluetooth is receiving
+    // continuously.
+    bt_set_discoverable(false);
+    printf("[wifi-wake] connecting to \"%s\" (bluetooth scan quietened)\n", ssid);
     int err;
     TIMED("cyw43_arch_wifi_connect_async",
           err = cyw43_arch_wifi_connect_async(ssid, password, CYW43_AUTH_WPA2_AES_PSK));
@@ -249,6 +260,9 @@ void link_task() {
     if (status == CYW43_LINK_UP) {
         if (link_state != LinkState::Connected) {
             link_state = LinkState::Connected;
+            // Associated: inquiry scan can come back, but page scan stays slow
+            // while Wi-Fi holds the link.
+            bt_set_discoverable(true);
             printf("[wifi-wake] connected, ip %s\n",
                    ipaddr_ntoa(netif_ip_addr4(netif_default)));
         }
@@ -256,7 +270,9 @@ void link_task() {
     }
 
     if (status < 0) {
+        // -2 is CYW43_LINK_NONET: the scan saw no matching SSID.
         printf("[wifi-wake] association failed (%d), retrying\n", status);
+        bt_set_discoverable(true);   // do not stay quiet through the retry gap
         link_state = LinkState::Idle;
         next_action = make_timeout_time_ms(RETRY_DELAY_MS);
         return;
@@ -272,6 +288,7 @@ void link_task() {
     if (absolute_time_diff_us(get_absolute_time(), join_deadline) <= 0) {
         printf("[wifi-wake] association timed out, retrying\n");
         WatchdogRelax relax;
+        bt_set_discoverable(true);
         cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA);
         link_state = LinkState::Idle;
         next_action = make_timeout_time_ms(RETRY_DELAY_MS);
