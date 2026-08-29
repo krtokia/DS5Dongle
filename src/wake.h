@@ -22,6 +22,9 @@ bool wake_host_is_suspended(void);
 // to find out whether it ever suspended at all.
 uint32_t wake_suspend_count(void);
 uint32_t wake_resume_count(void);
+// Keydowns actually accepted by the USB stack, as opposed to wake attempts
+// started. The gap between the two is where a wake can silently fail.
+uint32_t wake_key_sent_count(void);
 #else
 static inline void wake_init(void) {}
 static inline void wake_on_bt_connect(void) {}
@@ -33,6 +36,7 @@ static inline void wake_request_from_network(void) {}
 static inline bool wake_host_is_suspended(void) { return false; }
 static inline uint32_t wake_suspend_count(void) { return 0; }
 static inline uint32_t wake_resume_count(void) { return 0; }
+static inline uint32_t wake_key_sent_count(void) { return 0; }
 #endif
 
 #endif //DS5_BRIDGE_WAKE_H

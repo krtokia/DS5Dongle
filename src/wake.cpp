@@ -65,6 +65,7 @@ static critical_section_t wake_cs;
 static volatile bool host_suspended = false;
 static volatile uint32_t suspend_count = 0;
 static volatile uint32_t resume_count = 0;
+static volatile uint32_t key_sent_count = 0;
 static volatile bool host_resumed_event = false;
 static wake_state_t state = WAKE_IDLE;
 static uint64_t state_entered_us = 0;
@@ -272,6 +273,7 @@ bool wake_host_is_suspended(void) {
 
 uint32_t wake_suspend_count(void) { return suspend_count; }
 uint32_t wake_resume_count(void)  { return resume_count; }
+uint32_t wake_key_sent_count(void) { return key_sent_count; }
 
 void wake_on_bt_disconnect(void) {
     critical_section_enter_blocking(&wake_cs);
@@ -327,6 +329,7 @@ void wake_task(void) {
                 const bool sent = tud_hid_n_report(WAKE_KBD_INSTANCE, 0, rpt, sizeof(rpt));
                 WAKE_DBG("REQUESTED: sent keydown 0x%02X -> %d", WAKE_KEYCODE_F15, (int)sent);
                 if (sent) {
+                    key_sent_count++;
                     critical_section_enter_blocking(&wake_cs);
                     enter_state(WAKE_KEY_DOWN);
                     critical_section_exit(&wake_cs);

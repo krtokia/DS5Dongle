@@ -130,8 +130,15 @@ enum class LinkState { Idle, Connecting, Connected };
 // the LED reports them instead:
 //
 //   one short flash every 5 s   Wi-Fi is associated and listening
-//   three short flashes         a trigger packet arrived and the key was sent
-//   one long flash              a trigger arrived but wake is off in the config
+//   three short flashes         a trigger packet arrived and was accepted
+//   one long flash (1.5 s)      the keystroke actually reached the USB stack
+//   two medium flashes          a trigger arrived but wake is off in the config
+//
+// The three-flash and the long flash are deliberately separate events. The
+// first only says the trigger was taken; the second says a keydown was
+// accepted for transmission. A wake that fails between them looks nothing like
+// one that fails after, and without the console that distinction is otherwise
+// invisible.
 //
 // A flash is always a change from whatever the LED was already showing, and the
 // previous state is restored when the pattern ends. bt.cpp holds the LED on
@@ -141,7 +148,8 @@ enum class LinkState { Idle, Connecting, Connected };
 struct LedPattern { uint16_t on_ms; uint16_t off_ms; uint8_t flashes; };
 constexpr LedPattern LED_HEARTBEAT { 30,   0,   1 };
 constexpr LedPattern LED_TRIGGERED { 80,   90,  3 };
-constexpr LedPattern LED_REFUSED   { 700,  0,   1 };
+constexpr LedPattern LED_KEY_SENT  { 1500, 0,   1 };
+constexpr LedPattern LED_REFUSED   { 400,  250, 2 };
 #define LED_HEARTBEAT_INTERVAL_MS 5000
 
 LedPattern led_pattern {};
@@ -433,6 +441,14 @@ void wifi_wake_led_tick(void) {
     if (!credentials_ok) return;
     const absolute_time_t now = get_absolute_time();
 
+    // A keystroke reaching the USB stack outranks the heartbeat.
+    static uint32_t last_keys_seen = 0;
+    const uint32_t keys = wake_key_sent_count();
+    if (keys != last_keys_seen) {
+        last_keys_seen = keys;
+        led_play(LED_KEY_SENT);
+    }
+
     if (led_flashes_left == 0) {
         // Idle: a short flash every few seconds says the listener is armed.
         if (radio_up && link_state == LinkState::Connected &&
@@ -507,13 +523,14 @@ void report_status() {
 
     const int64_t idle_ms = absolute_time_diff_us(last_bt_input, get_absolute_time()) / 1000;
     printf("[wifi-wake] status: wifi=%s link=%s host=%s suspends=%lu resumes=%lu "
-           "controller=%s idle=%llds\n",
+           "controller=%s keys=%lu idle=%llds\n",
            radio_up ? "up" : "down",
            link_state == LinkState::Connected ? "connected"
                : (link_state == LinkState::Connecting ? "connecting" : "idle"),
            wake_host_is_suspended() ? "suspended" : "awake",
            (unsigned long)wake_suspend_count(), (unsigned long)wake_resume_count(),
            bt_is_connected() ? "connected" : "none",
+           (unsigned long)wake_key_sent_count(),
            (long long)(idle_ms / 1000));
 }
 
