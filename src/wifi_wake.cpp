@@ -59,10 +59,14 @@
 
 // Let USB enumerate and the initial Bluetooth inquiry settle before touching
 // the radio for the first time.
-#define BOOT_SETTLE_MS      10000
-// Do not follow every momentary Bluetooth state change; a controller that
-// drops and reconnects should not cost two radio transitions.
-#define SWITCH_DEBOUNCE_MS  3000
+#define BOOT_SETTLE_MS      15000
+// After the controller attaches, bt.cpp calls tud_connect() and the host starts
+// enumerating. Wait well past that before performing the blocking teardown.
+#define TEARDOWN_DELAY_MS   5000
+// How long the controller has to stay away before Wi-Fi is worth bringing up.
+// Long enough that a controller reconnecting does not cost a radio transition,
+// and that USB has settled either way.
+#define BRINGUP_IDLE_MS     30000
 
 // Must match the value main.cpp arms the watchdog with.
 #define WATCHDOG_NORMAL_MS  1000
@@ -108,11 +112,13 @@ char ssid[WIFI_CFG_SSID_LEN];
 char password[WIFI_CFG_PASS_LEN];
 
 bool radio_up = false;          // is the station interface currently up
+bool paused = true;             // Bluetooth owns the radio; do no Wi-Fi work
 bool booted = false;            // has BOOT_SETTLE_MS elapsed
 bool mac_reported = false;
+bool idle_timing = false;
 absolute_time_t settle_deadline;
-absolute_time_t switch_deadline;
-bool switch_pending = false;
+absolute_time_t teardown_at;
+absolute_time_t bringup_at;
 
 LinkState link_state = LinkState::Idle;
 absolute_time_t next_action;
@@ -272,27 +278,41 @@ void link_task() {
     }
 }
 
-// Decides which radio should own the chip and performs at most one transition
-// per call. Debounced, so a controller that briefly drops does not cost two.
+// Decides which stack owns the radio.
+//
+// The two directions are deliberately not symmetric. bt.cpp calls tud_connect()
+// the moment the controller attaches, so the host begins enumerating right then
+// and the main loop has to stay responsive - which is the worst possible moment
+// to be several hundred milliseconds inside an ioctl to the CYW43. So a
+// controller arriving stops all Wi-Fi work immediately, and the blocking
+// teardown is deferred until enumeration has long since finished. A controller
+// leaving is not urgent at all, so that direction just waits.
 void arbitrate_radio() {
-    const bool want_up = !bt_is_connected();
-    if (want_up == radio_up) {
-        switch_pending = false;
+    const absolute_time_t now = get_absolute_time();
+
+    if (bt_is_connected()) {
+        idle_timing = false;
+        if (!paused) {
+            // Takes effect on this same loop iteration: link_task() is skipped
+            // from here on, so nothing new is issued to the chip.
+            paused = true;
+            teardown_at = make_timeout_time_ms(TEARDOWN_DELAY_MS);
+            printf("[wifi-wake] controller connected -> Wi-Fi work stopped\n");
+        }
+        if (radio_up && absolute_time_diff_us(now, teardown_at) <= 0) {
+            radio_bring_down();
+        }
         return;
     }
 
-    if (!switch_pending) {
-        switch_pending = true;
-        switch_deadline = make_timeout_time_ms(SWITCH_DEBOUNCE_MS);
+    paused = false;
+    if (!idle_timing) {
+        idle_timing = true;
+        bringup_at = make_timeout_time_ms(BRINGUP_IDLE_MS);
         return;
     }
-    if (absolute_time_diff_us(get_absolute_time(), switch_deadline) > 0) return;
-
-    switch_pending = false;
-    if (want_up) {
+    if (!radio_up && absolute_time_diff_us(now, bringup_at) <= 0) {
         radio_bring_up();
-    } else {
-        radio_bring_down();
     }
 }
 
@@ -311,8 +331,8 @@ void wifi_wake_init(void) {
     listener_start();
 
     settle_deadline = make_timeout_time_ms(BOOT_SETTLE_MS);
-    printf("[wifi-wake] armed; Wi-Fi comes up once no controller is connected "
-           "(settling for %d ms first)\n", BOOT_SETTLE_MS);
+    printf("[wifi-wake] armed; Wi-Fi comes up after %d ms with no controller\n",
+           BRINGUP_IDLE_MS);
 }
 
 void wifi_wake_task(void) {
@@ -331,7 +351,8 @@ void wifi_wake_task(void) {
 
     arbitrate_radio();
 
-    if (radio_up) link_task();
+    // Nothing reaches the chip while Bluetooth owns it.
+    if (radio_up && !paused) link_task();
 }
 
 #endif // ENABLE_WIFI_WAKE
