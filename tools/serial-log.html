@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DS5Dongle 시리얼 로그</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg:#f6f7f9; --panel:#fff; --ink:#16181d; --muted:#5c6370;
+    --line:#d9dde3; --accent:#2f6fed; --ok:#1a7f4b; --err:#c0392b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14161a; --panel:#1c1f25; --ink:#e6e8ec; --muted:#9aa1ad;
+            --line:#2e333b; --accent:#6f9bff; --ok:#4cc38a; --err:#f0776a; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:1.5rem 1rem 3rem;background:var(--bg);color:var(--ink);
+       font:15px/1.6 system-ui,-apple-system,"Segoe UI","Noto Sans KR",sans-serif}
+  main{max-width:900px;margin:0 auto}
+  h1{font-size:1.3rem;margin:0 0 .25rem}
+  .sub{color:var(--muted);margin:0 0 1.25rem;font-size:.92rem}
+  .bar{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-bottom:.75rem}
+  button{font:inherit;font-weight:600;padding:.55rem 1rem;border-radius:6px;
+         border:1px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  #status{font-size:.9rem;color:var(--muted);margin-left:.25rem}
+  #status.ok{color:var(--ok)} #status.err{color:var(--err)}
+  pre{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+      padding:1rem;min-height:22rem;max-height:60vh;overflow:auto;margin:0;
+      font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      font-size:.85rem;line-height:1.5;white-space:pre-wrap;word-break:break-all}
+  .note{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);
+        border-radius:6px;padding:.75rem 1rem;font-size:.9rem;margin-bottom:1.25rem}
+  .note ol{margin:.5rem 0 0;padding-left:1.25rem} .note li{margin:.25rem 0}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em}
+  #unsupported{display:none;border-left-color:var(--err);color:var(--err)}
+</style>
+</head>
+<body>
+<main>
+  <h1>DS5Dongle 시리얼 로그</h1>
+  <p class="sub">브라우저에서 바로 보드의 로그를 봅니다. 설치할 것 없습니다.</p>
+
+  <div class="note" id="unsupported">
+    <strong>이 브라우저에서는 안 됩니다.</strong><br>
+    WebSerial은 Chrome 또는 Edge에서만 동작합니다. Firefox와 Safari는 지원하지 않습니다.
+    또 이 페이지는 반드시 <code>https://</code> 주소로 열어야 합니다 — 파일을 직접
+    더블클릭해서 열면 브라우저가 시리얼 접근을 막습니다.
+  </div>
+
+  <div class="note">
+    <strong>순서</strong>
+    <ol>
+      <li><code>-debug</code> 가 붙은 <code>.uf2</code> 를 보드에 플래시합니다.</li>
+      <li>보드를 USB로 연결합니다. <strong>LED가 안 켜지는 것이 정상입니다</strong> —
+          이 펌웨어는 아래에서 연결할 때까지 기다립니다.</li>
+      <li><strong>연결</strong>을 누르고 목록에서 보드를 고릅니다.</li>
+      <li>연결되는 순간 보드가 진행하며 로그가 흐릅니다.</li>
+      <li>다 나오면 <strong>전체 복사</strong>로 붙여넣어 주세요.</li>
+    </ol>
+  </div>
+
+  <div class="bar">
+    <button class="primary" id="connect">연결</button>
+    <button id="disconnect" disabled>끊기</button>
+    <button id="copy">전체 복사</button>
+    <button id="clear">지우기</button>
+    <button id="save">파일로 저장</button>
+    <span id="status">대기 중</span>
+  </div>
+
+  <pre id="log"></pre>
+</main>
+
+<script>
+"use strict";
+
+const els = {
+  connect: document.getElementById("connect"),
+  disconnect: document.getElementById("disconnect"),
+  copy: document.getElementById("copy"),
+  clear: document.getElementById("clear"),
+  save: document.getElementById("save"),
+  status: document.getElementById("status"),
+  log: document.getElementById("log"),
+  unsupported: document.getElementById("unsupported"),
+};
+
+let port = null;
+let reader = null;
+let keepReading = false;
+
+function setStatus(msg, kind) {
+  els.status.textContent = msg;
+  els.status.className = kind || "";
+}
+
+function append(text) {
+  // Keep the view pinned to the bottom only when it already was, so scrolling
+  // back to read something is not fought by incoming output.
+  const atBottom = els.log.scrollHeight - els.log.scrollTop - els.log.clientHeight < 40;
+  els.log.textContent += text;
+  if (atBottom) els.log.scrollTop = els.log.scrollHeight;
+}
+
+if (!("serial" in navigator)) {
+  els.unsupported.style.display = "block";
+  els.connect.disabled = true;
+  setStatus("사용 불가", "err");
+}
+
+els.connect.addEventListener("click", async () => {
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+
+    // The firmware waits on DTR to decide a terminal is attached, so it has to
+    // be asserted or the board never leaves its startup wait.
+    try { await port.setSignals({ dataTerminalReady: true, requestToSend: true }); }
+    catch (e) { append(`[페이지] DTR 설정 실패: ${e.message}\n`); }
+
+    els.connect.disabled = true;
+    els.disconnect.disabled = false;
+    setStatus("연결됨", "ok");
+    append(`[페이지] ${new Date().toLocaleTimeString()} 연결됨\n`);
+
+    keepReading = true;
+    const decoder = new TextDecoderStream();
+    port.readable.pipeTo(decoder.writable).catch(() => {});
+    reader = decoder.readable.getReader();
+
+    while (keepReading) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) append(value);
+    }
+  } catch (e) {
+    setStatus(e.name === "NotFoundError" ? "선택 취소됨" : `오류: ${e.message}`,
+              e.name === "NotFoundError" ? "" : "err");
+    els.connect.disabled = false;
+    els.disconnect.disabled = true;
+  }
+});
+
+els.disconnect.addEventListener("click", async () => {
+  keepReading = false;
+  try { if (reader) await reader.cancel(); } catch (e) {}
+  try { if (port) await port.close(); } catch (e) {}
+  port = null; reader = null;
+  els.connect.disabled = false;
+  els.disconnect.disabled = true;
+  setStatus("끊김");
+  append(`[페이지] 끊김\n`);
+});
+
+els.copy.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(els.log.textContent);
+    setStatus("복사됨", "ok");
+  } catch (e) {
+    // Clipboard access can be refused; selecting the text still works.
+    const r = document.createRange();
+    r.selectNodeContents(els.log);
+    const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    setStatus("전체 선택됨 - Ctrl+C 로 복사하세요");
+  }
+});
+
+els.clear.addEventListener("click", () => { els.log.textContent = ""; setStatus("지움"); });
+
+els.save.addEventListener("click", () => {
+  const blob = new Blob([els.log.textContent], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `ds5dongle-${new Date().toISOString().replace(/[:.]/g, "-")}.log`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+});
+</script>
+</body>
+</html>
