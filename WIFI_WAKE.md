@@ -18,9 +18,18 @@ Wake-on-PS와 나란히 동작한다. 키보드 인터페이스와 웨이크 FSM
 ## 빌드
 
 ```sh
-cmake -B build -G Ninja -DPICO_SDK_PATH=... -DCMAKE_BUILD_TYPE=Release -DENABLE_WIFI_WAKE=ON .
+cmake -B build -G Ninja -DPICO_SDK_PATH=... -DCMAKE_BUILD_TYPE=Release \
+      -DENABLE_WIFI_WAKE=ON -DDISABLE_SPEAKER_PROC=ON .
 cmake --build build
 ```
+
+> **`DISABLE_SPEAKER_PROC=ON` 이 필요하다.** lwIP의 정적 풀은 힙에서 직접 빠지는데,
+> 그것만으로 btstack이 inquiry 중에 `Out of memory` 로 죽는다. 컨트롤러가 아예 붙지 않고
+> 호스트는 "USB 장치를 인식할 수 없음"을 띄운다. 실측: 순정 힙 119.5 KB(정상),
+> lwIP만 추가 112.9 KB(**죽음**), `DISABLE_SPEAKER_PROC` 추가 423.9 KB(정상).
+>
+> 대가는 컨트롤러 내장 스피커와 3.5 mm 출력이다. 마이크 입력과 컨트롤러 기능은 남는다.
+> 자세한 조사 기록은 [`docs/heap-investigation.md`](docs/heap-investigation.md).
 
 `-DENABLE_WIFI_WAKE` 를 빼면 lwIP가 링크되지 않고, **적재되는 섹션이 상류와 전부 동일한**
 펌웨어가 나온다 (디버그 정보만 다름).
@@ -84,8 +93,24 @@ Bluetooth 때문에 이미 링크되어 있었기** 때문이다. 새로 들어�
   처리하므로, 재시도·세틀 타이밍·디스크립터·remote wakeup 신호는 상류 코드 그대로다.
 - 대기 중 무선 부하는 바인드된 UDP pcb 하나이고, 송신은 전혀 하지 않는다.
 
+## 상태
+
+- 컨트롤러 연결: **동작 확인** (`DISABLE_SPEAKER_PROC=ON` 빌드)
+- 컨트롤러 스피커 / 3.5 mm 출력: **없음** (힙을 확보하려고 뺀 것)
+- 네트워크 웨이크: 미검증
+
 ## 미검증
 
-**실물 테스트를 하지 않았다.** Bluetooth와 Wi-Fi가 CYW43439 라디오 하나를 시분할하므로,
-컨트롤러 오디오와 입력 지연에 미치는 영향을 측정해야 한다. 상류 Known Issues에 이미
-`Audio may experience slight stuttering` 이 있으므로, 기준선을 먼저 잡고 비교할 것.
+Bluetooth와 Wi-Fi가 CYW43439 라디오 하나를 시분할할 때 입력 지연에 미치는 영향은 아직
+측정하지 않았다. 다만 이 펌웨어는 **컨트롤러가 연결된 동안 Wi-Fi를 내려두므로**
+(`src/wifi_wake.cpp` 의 `arbitrate_radio()`) 게임 중에는 둘이 겹치지 않는다.
+Wi-Fi는 컨트롤러가 사라지고 30초 뒤에 올라온다.
+
+## 로그 보는 법
+
+`-DENABLE_SERIAL=ON` 으로 빌드하면 `printf` 출력이 USB CDC 포트로 나온다. 하드웨어를
+추가할 필요가 없다. [`tools/serial-log.html`](tools/serial-log.html) 을 `https://` 로 열면
+브라우저(Chrome/Edge)에서 바로 읽을 수 있다.
+
+> `ENABLE_SERIAL=ON` 빌드는 **터미널이 붙을 때까지 아무것도 하지 않는다.** LED도 안 켜지고
+> 컨트롤러도 안 붙는다. `cyw43_arch_init()` 앞에서 기다리기 때문이며 고장이 아니다.

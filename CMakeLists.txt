@@ -349,6 +349,21 @@ if (ENABLE_WIFI_WAKE)
         message(WARNING "WIFI_SSID/WIFI_PASSWORD are being compiled into the binary in plain text. "
                         "Do not publish the resulting .uf2/.elf.")
     endif ()
+
+    # lwIP's pools are static, and on this platform the heap is whatever is left
+    # between the end of .bss and the top of RAM - so linking it takes that
+    # memory straight out of the heap btstack allocates from. Measured on
+    # hardware: a stock build leaves 119.5 KB of heap and runs; this build with
+    # lwIP leaves 112.9 KB and panics with "Out of memory" as inquiry starts.
+    # DISABLE_SPEAKER_PROC drops the Opus code that gets relocated into RAM and
+    # takes the heap to 423.9 KB. See docs/heap-investigation.md.
+    if (NOT DISABLE_SPEAKER_PROC)
+        message(WARNING
+                "ENABLE_WIFI_WAKE without DISABLE_SPEAKER_PROC has been observed to run out of "
+                "heap on a Pico 2 W: btstack panics with 'Out of memory' when inquiry starts and "
+                "the controller never attaches. Add -DDISABLE_SPEAKER_PROC=ON. "
+                "See docs/heap-investigation.md.")
+    endif ()
 endif ()
 
 # Both stacks are 2 KB by default and live in the RP2350's two 4 KB scratch

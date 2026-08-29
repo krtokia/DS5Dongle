@@ -32,19 +32,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Build .uf2 (ENABLE_WIFI_WAKE=ON)
+          # DISABLE_SPEAKER_PROC is not optional here: without it btstack runs
+          # out of heap and the controller never attaches. See
+          # docs/heap-investigation.md.
+          - name: Build .uf2
             artifact: ds5-bridge-wifi-wake
-            cmake_args: -DENABLE_WIFI_WAKE=ON
-          # Fallback for the heap. DISABLE_SPEAKER_PROC drops the controller
-          # speaker / 3.5 mm output path in audio.cpp, which is what pushes the
-          # Opus code into RAM, and takes the heap from ~113 KB to ~424 KB.
-          - name: Build .uf2 (no speaker output, large heap)
-            artifact: ds5-bridge-wifi-wake-nospeaker
             cmake_args: -DENABLE_WIFI_WAKE=ON -DDISABLE_SPEAKER_PROC=ON
           # Logs over a USB CDC port; read it with tools/serial-log.html.
           - name: Build .uf2 (diagnostic, USB serial log)
             artifact: ds5-bridge-wifi-wake-debug
-            cmake_args: -DENABLE_WIFI_WAKE=ON -DENABLE_SERIAL=ON -DWAKE_DEBUG=ON
+            cmake_args: -DENABLE_WIFI_WAKE=ON -DDISABLE_SPEAKER_PROC=ON -DENABLE_SERIAL=ON -DWAKE_DEBUG=ON
 
     steps:
       - name: Checkout
