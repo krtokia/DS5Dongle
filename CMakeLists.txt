@@ -341,9 +341,13 @@ if (ENABLE_WIFI_WAKE)
     # no secrets. Supplying them here works too, but bakes them into the binary.
     set(WIFI_SSID "" CACHE STRING "Default Wi-Fi SSID compiled into the firmware")
     set(WIFI_PASSWORD "" CACHE STRING "Default WPA2 passphrase compiled into the firmware")
+    # Minutes a connected-but-untouched controller has to sit before the radio
+    # goes back to Wi-Fi. Lower it to test the behaviour without waiting.
+    set(WIFI_WAKE_BT_IDLE_MIN 30 CACHE STRING "Idle minutes before Wi-Fi reclaims the radio")
     target_compile_definitions(ds5-bridge PRIVATE
             WIFI_SSID_DEFAULT="${WIFI_SSID}"
             WIFI_PASSWORD_DEFAULT="${WIFI_PASSWORD}"
+            WIFI_WAKE_BT_IDLE_MIN=${WIFI_WAKE_BT_IDLE_MIN}
     )
     if (NOT WIFI_SSID STREQUAL "")
         message(WARNING "WIFI_SSID/WIFI_PASSWORD are being compiled into the binary in plain text. "

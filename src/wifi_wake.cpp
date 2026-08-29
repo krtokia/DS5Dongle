@@ -70,6 +70,16 @@
 // and that USB has settled either way.
 #define BRINGUP_IDLE_MS     30000
 
+// A controller can stay connected while nobody is using it - it is paired and
+// idle on the desk. Sitting untouched this long means nobody is playing, and by
+// then the host has almost certainly gone to sleep, which is exactly when a
+// wake packet has to be able to arrive. So the radio goes back to Wi-Fi even
+// though the Bluetooth link is still up. Any input at all reverses it.
+#ifndef WIFI_WAKE_BT_IDLE_MIN
+#define WIFI_WAKE_BT_IDLE_MIN 30
+#endif
+#define BT_IDLE_MS          ((uint32_t)WIFI_WAKE_BT_IDLE_MIN * 60u * 1000u)
+
 // Must match the value main.cpp arms the watchdog with.
 #define WATCHDOG_NORMAL_MS  1000
 #define WATCHDOG_RELAXED_MS 8000
@@ -118,6 +128,7 @@ bool paused = true;             // Bluetooth owns the radio; do no Wi-Fi work
 bool booted = false;            // has BOOT_SETTLE_MS elapsed
 bool mac_reported = false;
 bool idle_timing = false;
+absolute_time_t last_bt_input;
 absolute_time_t settle_deadline;
 absolute_time_t teardown_at;
 absolute_time_t bringup_at;
@@ -192,7 +203,7 @@ bool listener_start() {
 
 void radio_bring_up() {
     WatchdogRelax relax;
-    printf("[wifi-wake] controller idle -> bringing Wi-Fi up\n");
+    printf("[wifi-wake] bringing Wi-Fi up\n");
     // Slow the page scan for as long as Wi-Fi holds the radio.
     bt_set_page_scan_fast(false);
     TIMED("cyw43_arch_enable_sta_mode", cyw43_arch_enable_sta_mode());
@@ -216,7 +227,7 @@ void radio_bring_up() {
 
 void radio_bring_down() {
     WatchdogRelax relax;
-    printf("[wifi-wake] controller connected -> taking Wi-Fi down\n");
+    printf("[wifi-wake] taking Wi-Fi down\n");
     TIMED("cyw43_arch_disable_sta_mode", cyw43_arch_disable_sta_mode());
     // Bluetooth gets the radio back at full rate.
     bt_set_page_scan_fast(true);
@@ -307,14 +318,27 @@ void link_task() {
 void arbitrate_radio() {
     const absolute_time_t now = get_absolute_time();
 
-    if (bt_is_connected()) {
+    // Who should hold the radio. A controller in use always wins; a controller
+    // that has been untouched long enough does not, because by then the host is
+    // almost certainly asleep and a wake packet is the only thing that matters.
+    bool bluetooth_wins;
+    if (!bt_is_connected()) {
+        bluetooth_wins = false;
+    } else {
+        const int64_t idle_us = absolute_time_diff_us(last_bt_input, now);
+        bluetooth_wins = idle_us < (int64_t)BT_IDLE_MS * 1000;
+    }
+
+    if (bluetooth_wins) {
         idle_timing = false;
         if (!paused) {
             // Takes effect on this same loop iteration: link_task() is skipped
-            // from here on, so nothing new is issued to the chip.
+            // from here on, so nothing new is issued to the chip. bt.cpp calls
+            // tud_connect() as a controller attaches and the host starts
+            // enumerating right then, so the blocking teardown waits.
             paused = true;
             teardown_at = make_timeout_time_ms(TEARDOWN_DELAY_MS);
-            printf("[wifi-wake] controller connected -> Wi-Fi work stopped\n");
+            printf("[wifi-wake] controller in use -> Wi-Fi work stopped\n");
         }
         if (radio_up && absolute_time_diff_us(now, teardown_at) <= 0) {
             radio_bring_down();
@@ -325,7 +349,9 @@ void arbitrate_radio() {
     paused = false;
     if (!idle_timing) {
         idle_timing = true;
-        bringup_at = make_timeout_time_ms(BRINGUP_IDLE_MS);
+        // A controller that has gone quiet for long enough is already proof
+        // enough; only an absent one needs the settling wait.
+        bringup_at = bt_is_connected() ? now : make_timeout_time_ms(BRINGUP_IDLE_MS);
         return;
     }
     if (!radio_up && absolute_time_diff_us(now, bringup_at) <= 0) {
@@ -347,9 +373,15 @@ void wifi_wake_init(void) {
     // until the netif comes up, and it survives the interface going up and down.
     listener_start();
 
+    last_bt_input = get_absolute_time();
     settle_deadline = make_timeout_time_ms(BOOT_SETTLE_MS);
-    printf("[wifi-wake] armed; Wi-Fi comes up after %d ms with no controller\n",
-           BRINGUP_IDLE_MS);
+    printf("[wifi-wake] armed; Wi-Fi comes up %d s after the controller leaves, "
+           "or %d min after its last input\n",
+           BRINGUP_IDLE_MS / 1000, WIFI_WAKE_BT_IDLE_MIN);
+}
+
+void wifi_wake_note_bt_input(void) {
+    last_bt_input = get_absolute_time();
 }
 
 void wifi_wake_task(void) {

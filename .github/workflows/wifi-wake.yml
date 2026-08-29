@@ -39,9 +39,13 @@ jobs:
             artifact: ds5-bridge-wifi-wake
             cmake_args: -DENABLE_WIFI_WAKE=ON -DDISABLE_SPEAKER_PROC=ON
           # Logs over a USB CDC port; read it with tools/serial-log.html.
+          # The idle threshold is 2 minutes rather than 30 so the handover back
+          # to Wi-Fi can be watched without waiting half an hour.
           - name: Build .uf2 (diagnostic, USB serial log)
             artifact: ds5-bridge-wifi-wake-debug
-            cmake_args: -DENABLE_WIFI_WAKE=ON -DDISABLE_SPEAKER_PROC=ON -DENABLE_SERIAL=ON -DWAKE_DEBUG=ON
+            cmake_args: >-
+              -DENABLE_WIFI_WAKE=ON -DDISABLE_SPEAKER_PROC=ON
+              -DENABLE_SERIAL=ON -DWAKE_DEBUG=ON -DWIFI_WAKE_BT_IDLE_MIN=2
 
     steps:
       - name: Checkout
