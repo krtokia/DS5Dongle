@@ -36,6 +36,7 @@
 #include "bt.h"
 #include "wake.h"
 #include "wifi_config.h"
+#include "config.h"
 
 #ifndef WIFI_WAKE_UDP_PORT
 #define WIFI_WAKE_UDP_PORT 9
@@ -124,6 +125,34 @@ public:
     } while (0)
 
 enum class LinkState { Idle, Connecting, Connected };
+
+// The console is unavailable exactly when the interesting things happen, so
+// the LED reports them instead:
+//
+//   one short flash every 5 s   Wi-Fi is associated and listening
+//   three short flashes         a trigger packet arrived and the key was sent
+//   one long flash              a trigger arrived but wake is off in the config
+//
+// A pattern owns the LED until it finishes; outside one nothing is written, so
+// the battery and inquiry indicators keep it the rest of the time.
+struct LedPattern { uint16_t on_ms; uint16_t off_ms; uint8_t flashes; };
+constexpr LedPattern LED_HEARTBEAT { 30,   0,   1 };
+constexpr LedPattern LED_TRIGGERED { 80,   90,  3 };
+constexpr LedPattern LED_REFUSED   { 700,  0,   1 };
+#define LED_HEARTBEAT_INTERVAL_MS 5000
+
+LedPattern led_pattern {};
+uint8_t led_flashes_left = 0;
+bool led_on = false;
+absolute_time_t led_next_change;
+absolute_time_t led_next_heartbeat;
+
+void led_play(const LedPattern &p) {
+    led_pattern = p;
+    led_flashes_left = p.flashes;
+    led_on = false;
+    led_next_change = get_absolute_time();
+}
 
 bool credentials_ok = false;
 char ssid[WIFI_CFG_SSID_LEN];
@@ -394,6 +423,38 @@ void wifi_wake_init(void) {
            BRINGUP_IDLE_MS / 1000, WIFI_WAKE_BT_IDLE_MIN);
 }
 
+void wifi_wake_led_tick(void) {
+    if (!credentials_ok) return;
+    const absolute_time_t now = get_absolute_time();
+
+    if (led_flashes_left == 0) {
+        // Idle: a short flash every few seconds says the listener is armed.
+        if (radio_up && link_state == LinkState::Connected &&
+            !get_config().disable_pico_led &&
+            absolute_time_diff_us(now, led_next_heartbeat) <= 0) {
+            led_next_heartbeat = make_timeout_time_ms(LED_HEARTBEAT_INTERVAL_MS);
+            led_play(LED_HEARTBEAT);
+        }
+        return;
+    }
+
+    if (absolute_time_diff_us(now, led_next_change) > 0) return;
+
+    if (!led_on) {
+        led_on = true;
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
+        led_next_change = make_timeout_time_ms(led_pattern.on_ms);
+        return;
+    }
+
+    led_on = false;
+    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
+    led_flashes_left--;
+    if (led_flashes_left > 0) {
+        led_next_change = make_timeout_time_ms(led_pattern.off_ms);
+    }
+}
+
 void wifi_wake_note_bt_input(const uint8_t *hid_input, uint16_t len) {
     // A DualSense streams input reports at the polling rate for as long as it
     // is connected, so a report arriving says nothing about whether anyone is
@@ -458,6 +519,9 @@ void wifi_wake_task(void) {
 
     if (trigger_pending) {
         trigger_pending = false;
+        // Report which way it went on the LED, because during a host sleep this
+        // is the only thing anyone can see.
+        led_play(get_config().enable_wake ? LED_TRIGGERED : LED_REFUSED);
         wake_request_from_network();
     }
 

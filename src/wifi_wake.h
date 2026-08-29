@@ -21,10 +21,17 @@ void wifi_wake_task(void);
 // whether or not anyone is holding it, so this looks at what changed rather
 // than at the fact that one arrived.
 void wifi_wake_note_bt_input(const uint8_t *hid_input, uint16_t len);
+
+// Drives the onboard LED. Call last in the main loop: while a pattern is
+// playing it takes the LED from the other users, and the rest of the time it
+// leaves it alone. This is the only way to see what the firmware is doing
+// while the host is asleep, since the USB console dies with it.
+void wifi_wake_led_tick(void);
 #else
 static inline void wifi_wake_init(void) {}
 static inline void wifi_wake_task(void) {}
 static inline void wifi_wake_note_bt_input(const uint8_t *, uint16_t) {}
+static inline void wifi_wake_led_tick(void) {}
 #endif
 
 #endif //DS5_BRIDGE_WIFI_WAKE_H

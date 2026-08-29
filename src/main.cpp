@@ -385,5 +385,7 @@ int main() {
         button_check();
         bt_inquiring_led();
         dse_task();
+        // Last, so its patterns win the LED while one is playing.
+        wifi_wake_led_tick();
     }
 }
