@@ -342,8 +342,15 @@ if (ENABLE_WIFI_WAKE)
     set(WIFI_SSID "" CACHE STRING "Default Wi-Fi SSID compiled into the firmware")
     set(WIFI_PASSWORD "" CACHE STRING "Default WPA2 passphrase compiled into the firmware")
     # Minutes a connected-but-untouched controller has to sit before the radio
-    # goes back to Wi-Fi. Lower it to test the behaviour without waiting.
-    set(WIFI_WAKE_BT_IDLE_MIN 30 CACHE STRING "Idle minutes before Wi-Fi reclaims the radio")
+    # goes back to Wi-Fi.
+    #
+    # Short on purpose. An established Bluetooth link is unaffected by Wi-Fi
+    # holding the radio - only new connections pay, and there is no new
+    # connection to make while a controller is already attached - so leaving
+    # Wi-Fi up during a lull costs close to nothing. Meanwhile a host that never
+    # reports a suspend makes this the only route to Wi-Fi being up when it
+    # sleeps, and half an hour of that is indistinguishable from broken.
+    set(WIFI_WAKE_BT_IDLE_MIN 3 CACHE STRING "Idle minutes before Wi-Fi reclaims the radio")
     target_compile_definitions(ds5-bridge PRIVATE
             WIFI_SSID_DEFAULT="${WIFI_SSID}"
             WIFI_PASSWORD_DEFAULT="${WIFI_PASSWORD}"
