@@ -220,6 +220,48 @@ void wake_on_bt_input(const uint8_t *hid_input, uint16_t len) {
     }
 }
 
+// Entry point for a network trigger (see wifi_wake.cpp).
+//
+// Unlike wake_on_bt_input(), this always proceeds. A wake packet is an explicit
+// request from the user rather than incidental input, so there is no risk of
+// firing during normal play - which is why the button path must gate on the bus
+// actually being suspended and this one must not. That gate is also what limits
+// the button path to hosts that suspend the bus: a host in modern standby (S0
+// low power idle) can leave the bus up, and then tud_remote_wakeup() refuses and
+// no key is ever sent.
+//
+// Forcing WAKE_REQUESTED reuses the rest of the FSM as-is, including its retry
+// and settle handling: its handler fires the keystroke once the host is not
+// suspended, which covers both a host that resumed in response to the remote
+// wakeup below and a host that never suspended the bus at all.
+void wake_request_from_network(void) {
+    // The keyboard interface is only enumerated while enable_wake is on
+    // (see usb_descriptors.cpp), so without it there is nothing to send on.
+    if (!get_config().enable_wake) {
+        WAKE_DBG("network trigger ignored: enable_wake is off");
+        return;
+    }
+    if (!tud_mounted()) {
+        WAKE_DBG("network trigger ignored: not enumerated");
+        return;
+    }
+
+    if (host_suspended) {
+        if (!tud_remote_wakeup()) {
+            // Same fallback as request_host_wake(): the host can leave the bus
+            // suspended without having set the REMOTE_WAKEUP feature.
+            WAKE_DBG("network trigger: tud_remote_wakeup()=0 while suspended, forcing DCD wake");
+            dcd_remote_wakeup(0);
+        }
+    }
+
+    critical_section_enter_blocking(&wake_cs);
+    key_attempts = 0;
+    enter_state(WAKE_REQUESTED);
+    critical_section_exit(&wake_cs);
+    WAKE_DBG("network trigger -> REQUESTED");
+}
+
 void wake_on_bt_disconnect(void) {
     critical_section_enter_blocking(&wake_cs);
     state = WAKE_IDLE;

@@ -288,7 +288,7 @@ endif()
 target_compile_definitions(bs2_default PRIVATE PICO_FLASH_SPI_CLKDIV=${PICO_FLASH_SPI_CLKDIV})
 target_compile_definitions(ds5-bridge PRIVATE PICO_EMBED_XIP_SETUP=1)
 target_compile_definitions(ds5-bridge PRIVATE
-        CYW43_LWIP=0
+        CYW43_LWIP=$<BOOL:${ENABLE_WIFI_WAKE}>
         ENABLE_SERIAL=${ENABLE_SERIAL_VALUE}
         # 0 (not 1): flash_safe_execute() must really park core1 while flash is
         # accessed - both config_save() and the BOOTSEL CSn float poll. core1_entry
@@ -316,6 +316,32 @@ target_sources(ds5-bridge PRIVATE
         src/wake.cpp
         src/ps_shortcut.cpp
 )
+
+# Network wake: join Wi-Fi and listen for a UDP trigger packet, which then drives
+# the same keyboard FSM as Wake-on-PS. Off by default; it turns on the Wi-Fi half
+# of the CYW43439 alongside Bluetooth, which costs ~18 KB of RAM and makes the two
+# share the radio.
+option(ENABLE_WIFI_WAKE "Wake the host from a UDP packet over Wi-Fi" OFF)
+if (ENABLE_WIFI_WAKE)
+    target_compile_definitions(ds5-bridge PRIVATE ENABLE_WIFI_WAKE)
+    target_sources(ds5-bridge PRIVATE
+            src/wifi_wake.cpp
+            src/wifi_config.c
+    )
+    # Credentials are not compiled in by default. They are written into the built
+    # .uf2 afterwards by tools/uf2-wifi-config.html, so a published build carries
+    # no secrets. Supplying them here works too, but bakes them into the binary.
+    set(WIFI_SSID "" CACHE STRING "Default Wi-Fi SSID compiled into the firmware")
+    set(WIFI_PASSWORD "" CACHE STRING "Default WPA2 passphrase compiled into the firmware")
+    target_compile_definitions(ds5-bridge PRIVATE
+            WIFI_SSID_DEFAULT="${WIFI_SSID}"
+            WIFI_PASSWORD_DEFAULT="${WIFI_PASSWORD}"
+    )
+    if (NOT WIFI_SSID STREQUAL "")
+        message(WARNING "WIFI_SSID/WIFI_PASSWORD are being compiled into the binary in plain text. "
+                        "Do not publish the resulting .uf2/.elf.")
+    endif ()
+endif ()
 
 option(WAKE_DEBUG "Print wake-FSM transitions to UART (developer use)" OFF)
 if(WAKE_DEBUG)
@@ -351,7 +377,7 @@ target_link_libraries(ds5-bridge
         hardware_flash
         pico_btstack_classic
 #        pico_cyw43_arch_threadsafe_background
-        pico_cyw43_arch_poll
+        $<IF:$<BOOL:${ENABLE_WIFI_WAKE}>,pico_cyw43_arch_lwip_poll,pico_cyw43_arch_poll>
         pico_btstack_cyw43
         tinyusb_device
         tinyusb_board

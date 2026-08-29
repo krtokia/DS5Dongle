@@ -14,6 +14,7 @@
 #include "debug.h"
 #endif
 #include "wake.h"
+#include "wifi_wake.h"
 #ifdef ENABLE_WAKE_HID
 #include "ps_shortcut.h"
 #endif
@@ -354,6 +355,10 @@ int main() {
     bt_init();
     bt_register_data_callback(on_bt_data);
 
+    // After bt_init() so Bluetooth owns the radio first; association itself is
+    // asynchronous and polled from the loop below, so this does not block.
+    wifi_wake_init();
+
     audio_init();
 
 #if !ENABLE_SERIAL
@@ -367,6 +372,7 @@ int main() {
         cyw43_arch_poll();
         tud_task();
         wake_task();
+        wifi_wake_task();
         audio_loop();
 #if ENABLE_DEBUG
         debug_log_core1_stack_usage();
