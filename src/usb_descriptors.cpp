@@ -429,7 +429,7 @@ uint8_t descriptor_configuration[] = {
     0x00, // bCountryCode
     0x01, // bNumDescriptors
     0x22, // bDescriptorType: Report
-    0x2D, 0x00, // wDescriptorLength: 45 (sizeof desc_hid_report_kbd)
+    0x2F, 0x00, // wDescriptorLength: 47 (sizeof desc_hid_report_kbd)
 
     // Endpoint Descriptor (HID IN: EP7)
     0x07, // bLength
@@ -884,8 +884,15 @@ uint8_t const desc_hid_report_dse[] = {
 static_assert(sizeof(desc_hid_report_dse) == 437);
 
 #ifdef ENABLE_WAKE_HID
-// 41-byte boot-keyboard report descriptor (modifier byte + reserved + 6 keycodes,
-// no Report ID -- boot protocol forbids one and avoids collision with the gamepad's Report ID 1).
+// Boot-keyboard report descriptor (modifier byte + reserved + 6 keycodes, no
+// Report ID -- boot protocol forbids one and avoids collision with the gamepad's
+// Report ID 1). The keycode array declares the full 0..255 usage range rather
+// than stopping at 101 (Keyboard Application): a host's HID parser discards any
+// array value outside the declared Logical range, silently, after the transfer
+// has already succeeded. The wake key F13 is 0x68 = 104, so a range ending at
+// 101 makes every wake keystroke vanish inside Windows with nothing anywhere to
+// show for it. This matches what TUD_HID_REPORT_DESC_KEYBOARD and real keyboards
+// declare.
 uint8_t const desc_hid_report_kbd[] = {
     0x05, 0x01,       // Usage Page (Generic Desktop)
     0x09, 0x06,       // Usage (Keyboard)
@@ -904,14 +911,14 @@ uint8_t const desc_hid_report_kbd[] = {
     0x95, 0x06,       //   Report Count (6)
     0x75, 0x08,       //   Report Size (8)
     0x15, 0x00,       //   Logical Minimum (0)
-    0x25, 0x65,       //   Logical Maximum (101)
+    0x26, 0xFF, 0x00, //   Logical Maximum (255)
     0x05, 0x07,       //   Usage Page (Keyboard/Keypad)
     0x19, 0x00,       //   Usage Minimum (0)
-    0x29, 0x65,       //   Usage Maximum (101)
+    0x2A, 0xFF, 0x00, //   Usage Maximum (255)
     0x81, 0x00,       //   Input (Data,Array) -- 6 keycodes
     0xC0              // End Collection
 };
-_Static_assert(sizeof(desc_hid_report_kbd) == 45, "keyboard report descriptor length must match wDescriptorLength in config descriptor");
+_Static_assert(sizeof(desc_hid_report_kbd) == 47, "keyboard report descriptor length must match wDescriptorLength in config descriptor");
 #endif
 
 // Invoked when received GET HID REPORT DESCRIPTOR
