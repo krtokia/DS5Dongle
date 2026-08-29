@@ -35,28 +35,16 @@ jobs:
           - name: Build .uf2 (ENABLE_WIFI_WAKE=ON)
             artifact: ds5-bridge-wifi-wake
             cmake_args: -DENABLE_WIFI_WAKE=ON
-          # Diagnostic build. ENABLE_SERIAL routes printf to a USB CDC port, so
-          # logs need no UART adapter - and it also leaves the 1 s watchdog
-          # disabled, which makes this an A/B test for whether a watchdog reset
-          # is what breaks USB enumeration.
+          # Fallback for the heap. DISABLE_SPEAKER_PROC drops the controller
+          # speaker / 3.5 mm output path in audio.cpp, which is what pushes the
+          # Opus code into RAM, and takes the heap from ~113 KB to ~424 KB.
+          - name: Build .uf2 (no speaker output, large heap)
+            artifact: ds5-bridge-wifi-wake-nospeaker
+            cmake_args: -DENABLE_WIFI_WAKE=ON -DDISABLE_SPEAKER_PROC=ON
+          # Logs over a USB CDC port; read it with tools/serial-log.html.
           - name: Build .uf2 (diagnostic, USB serial log)
             artifact: ds5-bridge-wifi-wake-debug
             cmake_args: -DENABLE_WIFI_WAKE=ON -DENABLE_SERIAL=ON -DWAKE_DEBUG=ON
-          # Bisect build: the IP stack is linked and the cyw43_arch backend is
-          # swapped, but none of the Wi-Fi wake code is compiled in. If the
-          # controller fails to attach on this too, the cause is the build
-          # configuration and not anything this fork runs.
-          - name: Build .uf2 (bisect, lwIP linked but no feature code)
-            artifact: ds5-bridge-stack-only
-            cmake_args: -DWIFI_STACK_ONLY=ON
-          # Same two builds again with 4 KB stacks instead of 2 KB, testing
-          # whether the failure is stack exhaustion in the polling path.
-          - name: Build .uf2 (4 KB stacks, full feature)
-            artifact: ds5-bridge-wifi-wake-bigstack
-            cmake_args: -DENABLE_WIFI_WAKE=ON -DLARGER_STACKS=ON
-          - name: Build .uf2 (4 KB stacks, bisect)
-            artifact: ds5-bridge-stack-only-bigstack
-            cmake_args: -DWIFI_STACK_ONLY=ON -DLARGER_STACKS=ON
 
     steps:
       - name: Checkout
