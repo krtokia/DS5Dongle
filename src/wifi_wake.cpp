@@ -66,9 +66,10 @@
 // enumerating. Wait well past that before performing the blocking teardown.
 #define TEARDOWN_DELAY_MS   5000
 // How long the controller has to stay away before Wi-Fi is worth bringing up.
-// Long enough that a controller reconnecting does not cost a radio transition,
-// and that USB has settled either way.
-#define BRINGUP_IDLE_MS     30000
+// This is a fallback, not the main signal, so it is deliberately long: with the
+// host awake and the controller merely switched off, Bluetooth should keep the
+// radio at full rate so the controller attaches quickly when it comes back.
+#define BRINGUP_IDLE_MS     (5 * 60 * 1000)
 
 // A controller can stay connected while nobody is using it - it is paired and
 // idle on the desk. Sitting untouched this long means nobody is playing, and by
@@ -203,7 +204,8 @@ bool listener_start() {
 
 void radio_bring_up() {
     WatchdogRelax relax;
-    printf("[wifi-wake] bringing Wi-Fi up\n");
+    printf("[wifi-wake] bringing Wi-Fi up (host %s)\n",
+           wake_host_is_suspended() ? "suspended" : "awake");
     // Slow the page scan for as long as Wi-Fi holds the radio.
     bt_set_page_scan_fast(false);
     TIMED("cyw43_arch_enable_sta_mode", cyw43_arch_enable_sta_mode());
@@ -318,18 +320,22 @@ void link_task() {
 void arbitrate_radio() {
     const absolute_time_t now = get_absolute_time();
 
-    // Who should hold the radio. A controller in use always wins; a controller
-    // that has been untouched long enough does not, because by then the host is
-    // almost certainly asleep and a wake packet is the only thing that matters.
+    // A suspended USB bus is the one piece of direct evidence that the host is
+    // asleep, which is exactly and only when a wake packet has to be able to
+    // arrive. Everything else here is a fallback for hosts that never suspend
+    // the bus - some in modern standby do not - where idleness has to stand in
+    // for a signal that never comes.
     bool bluetooth_wins;
-    if (!bt_is_connected()) {
+    if (wake_host_is_suspended()) {
         bluetooth_wins = false;
+    } else if (!bt_is_connected()) {
+        bluetooth_wins = true;   // released below once the absence has lasted
     } else {
         const int64_t idle_us = absolute_time_diff_us(last_bt_input, now);
         bluetooth_wins = idle_us < (int64_t)BT_IDLE_MS * 1000;
     }
 
-    if (bluetooth_wins) {
+    if (bluetooth_wins && bt_is_connected()) {
         idle_timing = false;
         if (!paused) {
             // Takes effect on this same loop iteration: link_task() is skipped
@@ -346,12 +352,15 @@ void arbitrate_radio() {
         return;
     }
 
+    // Nothing is using Bluetooth. Wi-Fi may take the radio, after a wait whose
+    // length depends on how sure we are: a suspended host is certain, a
+    // controller that has already gone quiet has proved itself, and a merely
+    // absent one has to stay absent for a while first.
     paused = false;
     if (!idle_timing) {
         idle_timing = true;
-        // A controller that has gone quiet for long enough is already proof
-        // enough; only an absent one needs the settling wait.
-        bringup_at = bt_is_connected() ? now : make_timeout_time_ms(BRINGUP_IDLE_MS);
+        const bool certain = wake_host_is_suspended() || bt_is_connected();
+        bringup_at = certain ? now : make_timeout_time_ms(BRINGUP_IDLE_MS);
         return;
     }
     if (!radio_up && absolute_time_diff_us(now, bringup_at) <= 0) {
@@ -375,8 +384,8 @@ void wifi_wake_init(void) {
 
     last_bt_input = get_absolute_time();
     settle_deadline = make_timeout_time_ms(BOOT_SETTLE_MS);
-    printf("[wifi-wake] armed; Wi-Fi comes up %d s after the controller leaves, "
-           "or %d min after its last input\n",
+    printf("[wifi-wake] armed; Wi-Fi comes up when the host suspends, "
+           "or after %d s with no controller, or %d min with no input\n",
            BRINGUP_IDLE_MS / 1000, WIFI_WAKE_BT_IDLE_MIN);
 }
 

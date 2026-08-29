@@ -262,6 +262,10 @@ void wake_request_from_network(void) {
     WAKE_DBG("network trigger -> REQUESTED");
 }
 
+bool wake_host_is_suspended(void) {
+    return host_suspended;
+}
+
 void wake_on_bt_disconnect(void) {
     critical_section_enter_blocking(&wake_cs);
     state = WAKE_IDLE;

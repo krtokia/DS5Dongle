@@ -15,6 +15,8 @@ void wake_on_bt_disconnect(void);
 void wake_task(void);
 void wake_note_usb_reconnect(void);
 void wake_request_from_network(void);
+// Whether the USB host has suspended the bus, i.e. the PC is asleep.
+bool wake_host_is_suspended(void);
 #else
 static inline void wake_init(void) {}
 static inline void wake_on_bt_connect(void) {}
@@ -23,6 +25,7 @@ static inline void wake_on_bt_disconnect(void) {}
 static inline void wake_task(void) {}
 static inline void wake_note_usb_reconnect(void) {}
 static inline void wake_request_from_network(void) {}
+static inline bool wake_host_is_suspended(void) { return false; }
 #endif
 
 #endif //DS5_BRIDGE_WAKE_H
